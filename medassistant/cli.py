@@ -1,0 +1,171 @@
+"""Thin CLI over the pipeline (offline-testable, architecture.md §4).
+
+Commands:
+  build-index                  embed all guideline names -> data/index/
+  ask --question "…"           live: stream answer, then run the appendix machinery
+  ask --answer-file FILE       appendix machinery over pre-generated answers
+                               (JSONL rows: {question, raw_answer[, diseases[, picks]]};
+                               `diseases` stubs labeler 1, `picks` stubs labeler 2)
+  search --name "…"            debug: guideline search tool alone (needs embed)
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from . import audit as audit_mod
+from . import config, gindex, llm
+
+
+def _print_result(result):
+    print("\n--- Приложение ------------------------------------------------")
+    if result.appendix_text:
+        print(result.appendix_text)
+    for note in result.notes:
+        print(f"[!] {note}")
+    if not result.appendix_text and not result.notes:
+        print("(нет приложений и сообщений)")
+
+
+def cmd_build_index(args):
+    config.require(config.EMBED, "EMBED")
+    docs = config.load_docs_meta(args.docs)
+    n_docs, n_rows = gindex.build_index(docs, config.EMBED, args.out)
+    print(f"index built: {n_docs} guidelines, {n_rows} vectors -> {args.out}")
+
+
+def cmd_search(args):
+    config.require(config.EMBED, "EMBED")
+    from .abbr import Abbr, load_abbr
+    abbr_map = (Abbr(load_abbr(config.ABBR_PATH))
+                if config.ABBR_PATH.exists() else None)
+    index = gindex.GuidelineIndex.load(args.index)
+    variants = abbr_map.variants(args.name) if abbr_map else [args.name]
+    print(f"variants: {variants}")
+    for card in index.search(variants, config.EMBED, top_k=args.top_k):
+        print(f"  {card['score']:<8.4f} {card['code_version']:<10} {card['name']}")
+
+
+def _run_row(pipe, row, session_id=None):
+    question = row.get("question") or ""
+    raw_answer = row.get("raw_answer") or ""
+    if not raw_answer:
+        print("[skip] row without raw_answer", file=sys.stderr)
+        return
+    diseases, picks = row.get("diseases"), row.get("picks")
+    kw = {}
+    if diseases is not None:
+        kw["diseases"] = diseases
+        if picks is not None:
+            # fully offline stub: dummy search cards, picks come from the row
+            kw["search_fn"] = lambda v: [{"code_version": "—", "name": "—",
+                                          "score": 1.0}]
+            kw["select_fn"] = lambda q, a, d, c: list(picks)
+    elif picks is not None:
+        print("[skip] picks without diseases", file=sys.stderr)
+        return
+    result = pipe.run_appendix(question, raw_answer, session_id=session_id, **kw)
+    _print_result(result)
+
+
+def cmd_ask(args):
+    aud = audit_mod.Audit(config.AUDIT_LOG_PATH)
+    pipe = _load_pipeline(aud)
+    store = None
+    session_id = args.session
+    if args.session or args.save:
+        from .store import load_store
+        store = load_store()
+        if session_id is None:
+            session_id = store.create_session()
+        print(f"[session {session_id}]")
+
+    if args.answer_file:
+        for line in Path(args.answer_file).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                _run_row(pipe, json.loads(line), session_id=session_id)
+        return
+
+    if not args.question:
+        print("either --question or --answer-file is required", file=sys.stderr)
+        raise SystemExit(2)
+
+    history = store.history_window(session_id, config.HISTORY_WINDOW) if store else []
+    if store:
+        store.add_message(session_id, "user", args.question)
+    aud.log("question", session_id=session_id, question=args.question)
+
+    parts = []
+    try:
+        shown_thinking = False
+        for event in pipe.stream_answer(args.question, history):
+            if event["type"] == "reasoning":
+                if not shown_thinking:
+                    print("(модель размышляет — скрыто, пишется в stderr)",
+                          file=sys.stderr)
+                    shown_thinking = True
+                sys.stderr.write(event["text"])
+                sys.stderr.flush()
+            else:
+                parts.append(event["text"])
+                print(event["text"], end="", flush=True)
+        print()
+    except llm.LLMError as e:
+        aud.log("stage_stop", stage="answerer", session_id=session_id, error=str(e))
+        print(f"\n[сбой ответа] {e}", file=sys.stderr)
+        raise SystemExit(1)
+    raw_answer = "".join(parts)
+    aud.log("raw_answer", session_id=session_id, answer=raw_answer)
+
+    result = None
+    for ev in pipe.iter_appendix(args.question, raw_answer, session_id=session_id):
+        if ev.get("stage") == "done":
+            result = ev["result"]
+        else:
+            print(f"[подбор] {ev['stage']}"
+                  + (f": {ev['disease']}" if ev.get("disease") else ""),
+                  file=sys.stderr)
+    _print_result(result)
+    if store:
+        store.add_message(session_id, "assistant", raw_answer,
+                          appendix_payload=result.to_payload())
+        store.touch(session_id)
+
+
+def _load_pipeline(aud):
+    from .pipeline import load_pipeline
+    return load_pipeline(audit=aud)
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="medassistant",
+                                description="Answer-first medical assistant (architecture.md)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    b = sub.add_parser("build-index", help="embed guideline names -> index")
+    b.add_argument("--docs", default=str(config.DOCS_META_PATH))
+    b.add_argument("--out", default=str(config.INDEX_DIR))
+    b.set_defaults(func=cmd_build_index)
+
+    s = sub.add_parser("search", help="guideline search tool debug")
+    s.add_argument("--name", required=True)
+    s.add_argument("--index", default=str(config.INDEX_DIR))
+    s.add_argument("--top-k", type=int, default=config.TOP_K)
+    s.set_defaults(func=cmd_search)
+
+    a = sub.add_parser("ask", help="ask a question / re-run appendix on answers")
+    a.add_argument("--question")
+    a.add_argument("--answer-file")
+    a.add_argument("--session", type=int, default=None)
+    a.add_argument("--save", action="store_true",
+                   help="store the exchange in the sessions DB")
+    a.set_defaults(func=cmd_ask)
+
+    args = p.parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

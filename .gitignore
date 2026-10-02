@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+venv/
+.venv/
+data/index/
+data/clinrec_minzdrav/
+data/sessions.sqlite
+logs/
+.pytest_cache/

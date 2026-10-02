@@ -1,0 +1,88 @@
+import json
+import os
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+DEFAULTS = {
+    "DOCS_META": "data/docs_meta.json",
+    "ABBR_PATH": "data/abbr2term.yaml",
+    "INDEX_DIR": "data/index",
+    "CLINREC_DIR": "data/clinrec_minzdrav",
+    "SESSIONS_DB": "data/sessions.sqlite",
+    "AUDIT_LOG": "logs/audit.jsonl",
+}
+
+
+def load_env(path=None):
+    p = Path(path or PROJECT_ROOT / ".env")
+    if not p.exists():
+        return
+    for line in p.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+load_env()
+
+
+def _path(env_key):
+    v = os.environ.get(env_key, DEFAULTS[env_key])
+    p = Path(v)
+    return p if p.is_absolute() else PROJECT_ROOT / p
+
+
+DOCS_META_PATH = _path("DOCS_META")
+ABBR_PATH = _path("ABBR_PATH")
+INDEX_DIR = _path("INDEX_DIR")
+CLINREC_DIR = _path("CLINREC_DIR")
+SESSIONS_DB = _path("SESSIONS_DB")
+AUDIT_LOG_PATH = _path("AUDIT_LOG")
+
+HISTORY_WINDOW = int(os.environ.get("HISTORY_WINDOW", "6"))
+DISEASE_CAP = int(os.environ.get("DISEASE_CAP", "3"))
+TOP_K = int(os.environ.get("TOP_K", "5"))
+
+# Auto-pick (owner decision 2026-09-29): when one search candidate clearly
+# dominates, skip labeler call 2 and take it. AUTO_PICK=0 disables.
+AUTO_PICK = os.environ.get("AUTO_PICK", "1") not in {"0", "false", "no"}
+AUTO_PICK_MIN = float(os.environ.get("AUTO_PICK_MIN", "0.80"))
+AUTO_PICK_GAP = float(os.environ.get("AUTO_PICK_GAP", "0.05"))
+
+ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "2048"))
+LABELER_EXTRACT_MAX_TOKENS = int(os.environ.get("LABELER_EXTRACT_MAX_TOKENS", "200"))
+LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "128"))
+
+
+def _endpoint(prefix):
+    extra = os.environ.get(f"{prefix}_EXTRA_BODY", "").strip()
+    return {
+        "base_url": os.environ.get(f"{prefix}_BASE_URL", "").rstrip("/"),
+        "api_key": os.environ.get(f"{prefix}_API_KEY", ""),
+        "model": os.environ.get(f"{prefix}_MODEL", ""),
+        "extra_body": json.loads(extra) if extra else {},
+    }
+
+
+CANDIDATE = _endpoint("CANDIDATE")
+LABELER = _endpoint("LABELER")
+EMBED = _endpoint("EMBED")
+
+
+def require(endpoint, name):
+    if not endpoint["base_url"] or not endpoint["model"]:
+        raise SystemExit(
+            f"{name} endpoint not configured. Set {name}_BASE_URL and {name}_MODEL"
+            f"{' and ' + name + '_API_KEY' if not endpoint['api_key'] else ''} in .env"
+        )
+    return endpoint
+
+
+def load_docs_meta(path=None):
+    """docs_meta.json -> {code_version: meta} for all guidelines (no filters)."""
+    p = Path(path or DOCS_META_PATH)
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    return {row["code_version"]: row for row in rows}

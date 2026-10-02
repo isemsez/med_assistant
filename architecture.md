@@ -76,11 +76,12 @@ raw answer  ──────────────────────�
     + candidates -> pick ids or "none"             │
    │                                               │
    ▼                                               │
-[5] RENDERER (pure Python)                         │
-    ids -> docs_meta.json -> register PDF URL      │
-   │                                               │
-   ▼                                               ▼
-final answer = raw answer + appendix block (register PDF links only)
+[5] RENDERER (pure Python)
+     ids -> docs_meta.json -> local PDF file
+     (data/clinrec_minzdrav/, served at /data/pdf)
+    │                                               │
+    ▼                                               ▼
+final answer = raw answer + appendix block (local PDF links only)
 ```
 
 ### [1] Answerer
@@ -141,10 +142,18 @@ final answer = raw answer + appendix block (register PDF links only)
 
 ### [5] Renderer
 
-- Pure Python: picked ids → `docs_meta.json` → guideline name, version code,
-  **official register PDF URL** (`apicr.minzdrav.gov.ru/...GetClinrecPdf&id=…`).
+- Pure Python: picked ids → `docs_meta.json` → the local guideline PDF
+  (`data/clinrec_minzdrav/`, one file per register entry, moved from the
+  downloaded corpus 2026-10-02). The chat server serves the folder at
+  `/data/pdf`; the appendix links there and opens the PDF in a browser tab.
+- Guideline display names come from the PDF file name (textual part after the
+  version-code prefix) — the on-disk document title, which differs from the
+  register metadata name for ~114/757 entries. The CLI/audit appendix text
+  prints the absolute file path instead of the URL. Picks whose PDF is missing
+  on disk are dropped (per-disease «не найдено» note), never rendered as dead
+  links; a missing corpus folder is a clear server startup failure.
 - Appends a Russian appendix block under the untouched raw answer: the
-  matched guideline names, each with its version code and register PDF URL.
+  matched guideline names, each with its version code and local PDF link.
 - Every step of every call is logged to JSONL (question, raw answer, labeler
   outputs, tool results, picks) for auditability.
 
@@ -188,7 +197,7 @@ honest note.
 | Stage | Outcome | Physician-visible result |
 |---|---|---|
 | Labeler 1 | error (invalid / no output) | error note «сбой распознавания заболевания»; stop |
-| Labeler 1 | valid: no disease in the answer | note «Заболевание в ответе не найдено»; stop |
+| Labeler 1 | valid: no disease in the answer | note «Заболеваний в ответе не найдено»; stop |
 | Tool | error (embed endpoint down) | error note «сбой подбора рекомендаций»; stop |
 | Tool + Labeler 2 | valid: no match for the disease | per-disease note «Действующая клиническая рекомендация по заболеванию «X» не найдена» |
 | Labeler 2 | error (invalid output) | error note «сбой подбора рекомендаций»; stop |
@@ -240,7 +249,7 @@ honest note.
 ## 8. Decisions (owner, 2026-09-27)
 
 1. **Outcome notes per stage; errors never masquerade as results.** Labeler 1:
-   valid «no disease» → «Заболевание в ответе не найдено»; error → its own
+   valid «no disease» → «Заболеваний в ответе не найдено»; error → its own
    error note. Tool + Labeler 2: valid «no match» → per-disease
    «Действующая клиническая рекомендация по заболеванию «X» не найдена»;
    error → its own error note. Any empty or errored stage stops the
@@ -250,3 +259,42 @@ honest note.
 3. **Treatment lookup tool deferred.** First get the existing intentions
    working (same gate as labeler fine-tuning); the websearch tool is a later
    add-on, not part of the current build.
+
+## 9. Decisions (owner, 2026-09-29) — UX and fast path
+
+1. **Thinking is visible.** The answerer's reasoning streams into a
+   collapsible «Размышления модели» block above the answer; it is open while
+   thinking, auto-collapses when the answer text starts, and stays open if
+   the physician reopened it manually. Not persisted with the message.
+2. **Appendix progress is visible and non-blocking.** Each machinery stage
+   (extract → search → auto-pick/select) streams a status line under the
+   answer. The composer unblocks as soon as the answer text is complete —
+   the next question may be typed while the appendix finishes.
+3. **Auto-pick fast path.** When the top search candidate scores ≥ 0.80 and
+   leads the runner-up by ≥ 0.05 (or is the only candidate), labeler call 2
+   is skipped and that candidate is taken (marked «автоподбор» in the
+   appendix, `auto: true` in the audit log). Tunable: `AUTO_PICK`,
+   `AUTO_PICK_MIN`, `AUTO_PICK_GAP` in `.env`. Known tradeoff: near-duplicate
+   guideline versions (adult vs pediatric) may be auto-picked without the
+   relevance check; the physician remains the final check — and since
+   §10.1 the runner-ups are one click away in the appendix.
+
+## 10. Decisions (owner, 2026-10-02) — selection is not destructive
+
+1. **Flat filtered-out list in the payload.** Labeler 2's selection is
+   fallible (a wrong "none" verdict used to make all candidates vanish).
+   `by_disease` groups carry only the verified picks; every resolved
+   candidate that no disease verified lands in a flat top-level
+   `filtered_out` list (deduped by id across diseases, each entry keeping
+   the disease whose search produced it) — including auto-pick runner-ups
+   (the §9.3 recovery path). Persisted in the sessions DB with the payload.
+2. **UI: verified list + one collapsible.** The sources block shows the
+   verified links (all diseases) by default; ONE «Показать отфильтрованные
+   (N)» toggle for the whole block reveals the filtered-out candidates
+   (muted styling, disease attribution kept). A single filtered-out entry
+   is shown directly, without a toggle. The plain-text appendix
+   (CLI/audit) remains picks-only.
+3. **No-match notes dropped.** «Pdf по «X» не найдено» no longer fires when
+   candidates exist but none were verified — the filtered-out list is the
+   honest presentation. Legacy stored notes are filtered out in the UI.
+   True error notes (extract/search/select failures) are unchanged.

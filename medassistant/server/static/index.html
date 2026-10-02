@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мед.ассистент</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="sidebar-head">
+      <span class="logo">Мед.ассистент</span>
+    </div>
+    <button id="new-session" class="btn-primary">Новая беседа</button>
+    <div id="sessions"></div>
+    <div class="sidebar-foot">
+      <span id="backend-status">●</span>
+      <span>ответы не проверяются — источники под ответом</span>
+    </div>
+  </aside>
+  <main id="chat">
+    <div id="messages"></div>
+    <form id="composer">
+      <textarea id="question" rows="2" placeholder="Вопрос врача…" autofocus></textarea>
+      <button type="submit" id="send" class="btn-primary">Отправить</button>
+    </form>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
