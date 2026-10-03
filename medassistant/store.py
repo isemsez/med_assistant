@@ -8,6 +8,7 @@ messages(id, session_id, role, content, appendix_json, reasoning, created_at).
 
 import datetime
 import json
+import shutil
 import sqlite3
 import threading
 from pathlib import Path
@@ -188,3 +189,32 @@ class Store:
 def load_store(path=None):
     from . import config
     return Store(path or config.SESSIONS_DB)
+
+
+def backup(path=None, keep=None):
+    """Checkpoint WAL and copy the sessions DB to data/backups/ (keep newest N).
+
+    Called at server startup — physician conversations are the most valuable
+    local state and the cheapest to protect. Backups stay on this machine
+    (laptop-only deployment). Returns the backup path or None when the DB
+    does not exist yet.
+    """
+    from . import config
+    db_path = Path(path or config.SESSIONS_DB)
+    if not db_path.exists():
+        return None
+    keep = config.SESSIONS_BACKUP_KEEP if keep is None else keep
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+    backups = db_path.parent / "backups"
+    backups.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    dest = backups / f"sessions-{stamp}.sqlite"
+    shutil.copy2(db_path, dest)
+    olds = sorted(backups.glob("sessions-*.sqlite"), reverse=True)  # by stamp
+    for old in olds[keep:]:
+        old.unlink()
+    return dest

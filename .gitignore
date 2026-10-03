@@ -6,5 +6,10 @@ venv/
 data/index/
 data/clinrec_minzdrav/
 data/sessions.sqlite
+data/sessions.sqlite-shm
+data/sessions.sqlite-wal
+data/backups/
 logs/
 .pytest_cache/
+.idea/
+.kilo/plans/

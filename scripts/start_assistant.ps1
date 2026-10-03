@@ -1,19 +1,40 @@
-# One-shot launcher: main Ollama (:11434, answerer + embeddings), labeler
-# Ollama (:11435, iGPU) and the web app (uvicorn, foreground).
-# Safe to re-run: anything already listening is left alone.
-# Ctrl+C stops only the web app; the Ollama instances keep running.
-# Ollama instances run windowless; console output goes to
-# logs/ollama-main.*.log / logs/ollama-labeler.*.log (truncated per start).
-# Requires (once, see README): setx OLLAMA_IGPU_ENABLE 1,
+# Toggle launcher for the whole assistant stack: main Ollama (:11434,
+# answerer + embeddings), labeler Ollama (:11435, iGPU) and the web app
+# (uvicorn, :8866, background by default).
+#
+# TOGGLE: if ANY managed port is up, re-running STOPS every managed
+# component; if all are down, it starts them all. "Safe to re-run" no
+# longer means "no-op" - re-running a live stack stops it.
+#   powershell -File scripts\start_assistant.ps1              # start all / stop all
+#   powershell -File scripts\start_assistant.ps1 -SkipCanary  # start, skip the
+#                                                             # startup canary
+#   powershell -File scripts\start_assistant.ps1 -SkipWeb     # Ollama backends only
+#   powershell -File scripts\start_assistant.ps1 -Foreground  # start with uvicorn in
+#                                                             # this console; Ctrl+C
+#                                                             # stops only the web app
+# Start sequence: both Ollama instances -> startup canary (health checks +
+# one E2E question, minutes on first boot while models load; exit on
+# failure) -> web app.
+# Background components run windowless; every start writes per-boot logs
+# (logs/ollama-<inst>-<stamp>.*.log, logs/web-<stamp>.*.log) and prunes old
+# boots, keeping the 5 latest per component.
+# Stopping is a forced Stop-Process (no graceful shutdown) - acceptable for a
+# dev tool, the SQLite session store is crash-safe. Only python/uvicorn and
+# ollama processes are ever killed; anything else on a managed port is
+# reported and left alone.
+# Requires (once, see AGENTS.md): setx OLLAMA_IGPU_ENABLE 1,
 # setx OLLAMA_MAX_LOADED_MODELS 2, models pulled, .venv built.
+param([switch]$Foreground, [switch]$SkipWeb, [switch]$SkipCanary)
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $webPort = 8866
 $ollamaExe = "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe"
+$py = "$root\.venv\Scripts\python.exe"
 if (-not (Test-Path $ollamaExe)) { Write-Error "ollama.exe not found: $ollamaExe"; exit 1 }
 if (-not (Test-Path "$root\.env")) { Write-Warning ".env missing - copy .env.example .env" }
 if (-not (Test-Path "$root\logs")) { New-Item -ItemType Directory "$root\logs" | Out-Null }
+$bootStamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
 function Test-PortOpen([int]$port) {
     $c = [Net.Sockets.TcpClient]::new()
@@ -29,39 +50,123 @@ function Wait-PortOpen([int]$port, [int]$timeoutSec = 60) {
     Write-Error "port $port did not open within ${timeoutSec}s"; exit 1
 }
 
-function Start-OllamaHidden([string]$logPrefix) {
+function Start-OllamaHidden([string]$inst) {
     # windowless with logs: Windows Terminal (default host) ignores
     # -WindowStyle Minimized and pops a foreground window, so redirect
     # both streams to files instead (separate files: Start-Process
     # cannot share one for stdout+stderr)
     Start-Process $ollamaExe -ArgumentList "serve" -WindowStyle Hidden `
-        -RedirectStandardOutput "$root\logs\$logPrefix.out.log" `
-        -RedirectStandardError "$root\logs\$logPrefix.err.log"
+        -RedirectStandardOutput "$root\logs\ollama-$inst-$bootStamp.out.log" `
+        -RedirectStandardError "$root\logs\ollama-$inst-$bootStamp.err.log"
+    Remove-OldBootLogs "ollama-$inst"
 }
+
+function Remove-OldBootLogs([string]$prefix, [int]$keep = 5) {
+    # logs are per-boot stamped; keep the $keep newest boots of this prefix
+    $files = @(Get-ChildItem "$root\logs" -Filter "$prefix-*.log" -File -ErrorAction SilentlyContinue)
+    $stamps = @($files | ForEach-Object {
+            if ($_.Name -match "^$prefix-(.+)\.(out|err)\.log$") { $Matches[1] }
+        } | Select-Object -Unique)
+    $old = @($stamps | Sort-Object -Descending | Select-Object -Skip $keep)
+    foreach ($s in $old) {
+        Get-ChildItem "$root\logs" -Filter "$prefix-$s.*.log" -File | Remove-Item -Force
+    }
+}
+
+function Stop-ByPort([int]$port, [string]$procPattern, [string]$label) {
+    $conns = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+    $procIds = @($conns | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($procIds.Count -eq 0) { "  ${label} :${port} already down"; return }
+    foreach ($procId in $procIds) {
+        if ($procId -le 0) { continue }
+        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if ($null -eq $p) { continue }
+        if ($p.ProcessName -like $procPattern) {
+            Stop-Process -Id $procId -Force
+            "  stopped $($p.ProcessName) pid $procId (${label}, :${port})"
+        }
+        else {
+            Write-Warning "  :${port} is held by '$($p.ProcessName)' pid $procId (not ${procPattern}) - left alone"
+        }
+    }
+}
+
+# Managed components (web excluded by -SkipWeb in both directions).
+$components = @(
+    @{ Port = $webPort; Label = "web app";        Proc = "python*" }
+    @{ Port = 11434;   Label = "main Ollama";     Proc = "ollama*" }
+    @{ Port = 11435;   Label = "labeler Ollama";  Proc = "ollama*" }
+)
+if ($SkipWeb) { $components = @($components | Where-Object { $_.Port -ne $webPort }) }
+
+# --- toggle: if anything managed is up, stop everything managed ------------
+$up = @($components | Where-Object { Test-PortOpen $_.Port })
+if ($up.Count -gt 0) {
+    if ($Foreground -or $SkipCanary) {
+        Write-Warning "-Foreground/-SkipCanary apply only to starting; stopping instead."
+    }
+    "Stopping assistant (re-run to start again):"
+    foreach ($c in $components) { Stop-ByPort $c.Port $c.Proc $c.Label }
+    exit 0
+}
+
+# --- start everything -------------------------------------------------------
+"Starting assistant:"
 
 # 1) main instance (answerer medgemma-cpu + bge-m3), default host :11434.
 #    MUST run before the labeler env vars are set - otherwise it would
 #    inherit OLLAMA_HOST=:11435.
 if (Test-PortOpen 11434) { "main Ollama :11434 already up" }
 else {
-    Start-OllamaHidden "ollama-main"
+    Start-OllamaHidden "main"
     Wait-PortOpen 11434; "main Ollama :11434 started"
 }
 
-# 2) labeler instance, iGPU/Vulkan, :11435 (env mirrors start_labeler_ollama.ps1)
+# 2) labeler instance, iGPU/Vulkan, :11435. The web app does NOT read these
+#    vars (Python config uses its own *_BASE_URL keys), so inheriting them
+#    is harmless.
 if (Test-PortOpen 11435) { "labeler Ollama :11435 already up" }
 else {
     $env:OLLAMA_HOST = "127.0.0.1:11435"
     $env:OLLAMA_VULKAN = "true"
     $env:OLLAMA_IGPU_ENABLE = "1"
-    Start-OllamaHidden "ollama-labeler"
+    Start-OllamaHidden "labeler"
     Wait-PortOpen 11435; "labeler Ollama :11435 started"
 }
 
-# 3) web app (foreground). Run from $root: the package is not installed,
-#    uvicorn imports medassistant from the repo root via CWD on sys.path.
-$py = "$root\.venv\Scripts\python.exe"
-if (-not (Test-Path $py)) { Write-Error ".venv not found - see README Setup"; exit 1 }
-Push-Location $root
-try { & $py -m uvicorn medassistant.server:app --host 127.0.0.1 --port $webPort }
-finally { Pop-Location }
+if (-not (Test-Path $py)) { Write-Error ".venv not found - see AGENTS.md Setup"; exit 1 }
+
+# 3) startup canary: health checks + one E2E question through the real
+#    pipeline (minutes on first boot while models load). On failure the
+#    canary prints the failing check; the stack stays down.
+if (-not $SkipCanary) {
+    "running startup canary..."
+    Push-Location $root
+    try { & $py -m medassistant canary }
+    finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "startup canary failed - see the failing check above (model server errors: logs\ollama-*-*.err.log)"
+        exit 1
+    }
+}
+
+# 4) web app. Run from $root: the package is not installed, uvicorn imports
+#    medassistant from the repo root via CWD on sys.path.
+if ($SkipWeb) { "skipping web app (-SkipWeb)"; exit 0 }
+if ($Foreground) {
+    "web app in foreground (Ctrl+C stops only the web app)"
+    Push-Location $root
+    try { & $py -m uvicorn medassistant.server:app --host 127.0.0.1 --port $webPort }
+    finally { Pop-Location }
+}
+else {
+    Start-Process $py `
+        -ArgumentList "-m","uvicorn","medassistant.server:app","--host","127.0.0.1","--port",$webPort `
+        -WorkingDirectory $root -WindowStyle Hidden `
+        -RedirectStandardOutput "$root\logs\web-$bootStamp.out.log" `
+        -RedirectStandardError "$root\logs\web-$bootStamp.err.log"
+    Remove-OldBootLogs "web"
+    Wait-PortOpen $webPort
+    "web app started -> http://127.0.0.1:$webPort (logs: logs\web-$bootStamp.out.log / .err.log)"
+    "note: the first question is slow while the models load"
+}

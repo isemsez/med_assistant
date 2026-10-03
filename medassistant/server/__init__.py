@@ -4,15 +4,16 @@ Run: uvicorn medassistant.server:app --host 127.0.0.1 --port 8642
 """
 
 import json
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import audit as audit_mod
-from .. import appendix, config, llm
+from .. import appendix, config, health, llm, stats
 from ..pipeline import load_pipeline
 from ..store import load_store
 
@@ -34,7 +35,29 @@ class SessionRequest(BaseModel):
 def _wire():
     app.state.audit = audit_mod.Audit(config.AUDIT_LOG_PATH)
     app.state.store = load_store()
+    try:
+        store.backup()
+    except Exception as e:  # a failed backup must never block the app
+        app.state.audit.log("backup_failed", error=str(e))
     app.state.pipe = load_pipeline(audit=app.state.audit)
+
+
+@app.get("/api/health")
+def get_health():
+    """Liveness/readiness: endpoints, index freshness, corpus (cached 30s)."""
+    return health.run_health()
+
+
+@app.get("/api/stats")
+def get_stats(days: int = 7):
+    """Audit-log aggregates (admin page data source)."""
+    days = min(max(days, 1), 90)
+    return stats.collect(config.AUDIT_LOG_PATH, days=days)
+
+
+@app.get("/admin")
+def admin_page():
+    return FileResponse(STATIC_DIR / "admin.html")
 
 
 @app.post("/api/sessions")
@@ -102,6 +125,7 @@ def chat(req: ChatRequest):
         aud.log("question", session_id=sid, question=question)
 
         parts, reasoning_parts, failed = [], [], False
+        t_answer = time.monotonic()
         # medgemma's reasoning always starts with a stray "thought\n"; it
         # arrives split across stream deltas, so it is dropped char-wise
         drop = len("thought\n")
@@ -121,7 +145,8 @@ def chat(req: ChatRequest):
                     yield _sse("token", {"t": event["text"]})
         except llm.LLMError as e:
             failed = True
-            aud.log("stage_stop", stage="answerer", session_id=sid, error=str(e))
+            aud.log("stage_stop", stop_stage="answerer", session_id=sid,
+                    error=str(e))
             yield _sse("error", {"text": "Сбой генерации ответа."})
 
         raw_answer = "".join(parts)
@@ -133,7 +158,8 @@ def chat(req: ChatRequest):
         message_id = store.add_message(
             sid, "assistant", raw_answer,
             reasoning="".join(reasoning_parts) or None)
-        aud.log("raw_answer", session_id=sid, answer=raw_answer)
+        aud.log("raw_answer", session_id=sid, answer=raw_answer,
+                dur_s=round(time.monotonic() - t_answer, 2))
         # the answer is complete — the physician may ask the next question
         # while the appendix machinery runs below
         yield _sse("done", {"session_id": sid, "message_id": message_id,

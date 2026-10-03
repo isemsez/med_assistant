@@ -154,5 +154,33 @@ class TestDocsMeta(unittest.TestCase):
             self.assertTrue(meta["url"].startswith("https://"))
 
 
+class TestBackup(unittest.TestCase):
+    def test_backup_copies_and_prunes(self):
+        import time
+
+        from medassistant import store as store_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "s.db"
+            s = Store(db)
+            sid = s.create_session()
+            s.add_message(sid, "user", "вопрос")
+            s.close()
+            made = []
+            for _ in range(3):
+                made.append(store_mod.backup(db, keep=2))
+                time.sleep(0.02)
+            backups = sorted((Path(tmp) / "backups").glob("sessions-*.sqlite"))
+            self.assertEqual(len(backups), 2, "keep=2 prunes older backups")
+            self.assertIn(made[-1], backups)
+            restored = Store(backups[-1])
+            self.assertEqual(restored.get_messages(sid)[0]["content"], "вопрос")
+            restored.close()
+
+    def test_backup_missing_db(self):
+        from medassistant import store as store_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(store_mod.backup(Path(tmp) / "nope.db"))
+
+
 if __name__ == "__main__":
     unittest.main()

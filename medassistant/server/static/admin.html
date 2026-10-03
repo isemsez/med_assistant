@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мед.ассистент — состояние</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  body.admin-page { display: block; height: auto; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .banner { border-radius: 10px; padding: 10px 14px; font-size: 14px; margin-bottom: 20px; }
+  .banner.ok { background: var(--src-bg); border: 1px solid #d6e2d6; color: #2e6b40; }
+  .banner.bad { background: var(--err-bg); border: 1px solid #f2c4c0; color: var(--err); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel);
+    border: 1px solid #e2e8ee; border-radius: 10px; overflow: hidden; margin-bottom: 22px; }
+  th, td { text-align: left; padding: 7px 12px; font-size: 13.5px;
+    border-bottom: 1px solid #eef2f6; vertical-align: top; }
+  th { font-size: 11px; letter-spacing: 0.4px; text-transform: uppercase;
+    color: var(--muted); background: #fafbfc; }
+  tr:last-child td { border-bottom: 0; }
+  td.ok { color: #2e6b40; white-space: nowrap; }
+  td.bad { color: var(--err); }
+  td .detail { color: var(--muted); font-size: 12.5px; }
+  h2 { font-size: 15px; margin: 26px 0 10px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+  .card { background: var(--panel); border: 1px solid #e2e8ee; border-radius: 10px;
+    padding: 10px 14px; min-width: 120px; }
+  .card .num { font-size: 22px; font-weight: 600; }
+  .card .lbl { font-size: 11.5px; color: var(--muted); }
+  .card.bad .num { color: var(--err); }
+  .err-item { font-size: 12.5px; color: var(--ink); background: var(--panel);
+    border: 1px solid #e2e8ee; border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; }
+  .err-item .ts { color: var(--muted); font-size: 11.5px; }
+  .err-item .what { color: var(--err); }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body class="admin-page">
+<div class="wrap">
+  <h1>Состояние системы</h1>
+  <div class="sub">Проверки обновляются каждые 30 с · <a href="/">к чату</a></div>
+
+  <div id="health-banner" class="banner ok">загрузка…</div>
+
+  <h2>Проверки</h2>
+  <table id="health-table">
+    <thead><tr><th>Проверка</th><th>Статус</th><th>Детали</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>Использование за <span id="stats-days">7</span> дней</h2>
+  <div class="cards" id="usage-cards"></div>
+
+  <h2>Надёжность</h2>
+  <table id="reliability-table">
+    <thead><tr><th>Показатель</th><th>Значение</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>Последние ошибки</h2>
+  <div id="last-errors"><span class="muted">—</span></div>
+</div>
+<script>
+const REFRESH_MS = 30000;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function healthDetail(name, c) {
+  if (c.ok && name === "index")
+    return `fresh=${c.fresh} · рекомендаций: ${c.docs_meta} · векторов: ${c.vectors}`;
+  if (c.ok && name === "corpus") return `${c.pdfs} PDF`;
+  if (c.ok && name === "embed" && c.dim) return `dim=${c.dim}`;
+  if (c.error) return c.error;
+  if (c.note) return c.note;
+  return "";
+}
+
+async function refreshHealth() {
+  try {
+    const h = await (await fetch("/api/health")).json();
+    const banner = document.getElementById("health-banner");
+    const bad = Object.entries(h.checks).filter(([, c]) => !c.ok);
+    if (h.ok) {
+      banner.className = "banner ok";
+      banner.textContent = "Все проверки пройдены. Обновлено: " + h.ts;
+    } else {
+      banner.className = "banner bad";
+      banner.textContent = "Проблемы: " + bad.map(([n]) => n).join(", ") +
+        ". Модели/индекс недоступны — ответы могут не проходить проверку.";
+    }
+    const tb = document.querySelector("#health-table tbody");
+    tb.innerHTML = Object.entries(h.checks).map(([name, c]) => `
+      <tr>
+        <td>${esc(name)}</td>
+        <td class="${c.ok ? "ok" : "bad"}">${c.ok ? "ок" : "сбой"}</td>
+        <td><span class="detail">${esc(healthDetail(name, c))}</span></td>
+      </tr>`).join("");
+  } catch (e) {
+    const banner = document.getElementById("health-banner");
+    banner.className = "banner bad";
+    banner.textContent = "Веб-приложение не отвечает на /api/health: " + e;
+  }
+}
+
+function card(num, lbl, bad) {
+  return `<div class="card${bad ? " bad" : ""}"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`;
+}
+
+function pct(a, b) { return b ? Math.round(100 * a / b) + "%" : "—"; }
+
+async function refreshStats() {
+  try {
+    const s = await (await fetch("/api/stats?days=7")).json();
+    document.getElementById("stats-days").textContent = s.window_days;
+    const errTotal = Object.values(s.stage_stop).reduce((a, b) => a + b, 0) +
+      s.invalid.extract + s.invalid.select + s.appendix_crash;
+    document.getElementById("usage-cards").innerHTML =
+      card(s.turns, "вопросов") +
+      card(s.answers, "ответов") +
+      card(s.picks.calls, "подборов рекомендаций") +
+      card(pct(s.picks.auto, s.picks.calls), "автоподбор");
+    const rows = [
+      ["Статусы приложений", Object.entries(s.appendix_status).map(
+        ([k, v]) => `${esc(k)}: ${v}`).join(", ") || "—"],
+      ["Остановки стадий", Object.entries(s.stage_stop).map(
+        ([k, v]) => `${esc(k)}: ${v}`).join(", ") || "—"],
+      ["Невалидные ответы labeler",
+        `extract: ${s.invalid.extract} · select: ${s.invalid.select}`],
+      ["Схема-фолбэк labeler", s.schema_fallback],
+      ["Сбои механизма приложения", s.appendix_crash],
+    ];
+    for (const [stage, l] of Object.entries(s.latency_s)) {
+      rows.push([`Задержка: ${esc(stage)}`,
+        l.n ? `n=${l.n} · средняя ${l.mean} с · макс ${l.max} с` : "нет данных"]);
+    }
+    document.querySelector("#reliability-table tbody").innerHTML =
+      rows.map(([k, v]) =>
+        `<tr><td>${k}</td><td>${v}${typeof v === "number" && v > 0 ?
+          ' <span class="bad">⚠</span>' : ""}</td></tr>`).join("");
+    const le = document.getElementById("last-errors");
+    le.innerHTML = s.last_errors.length
+      ? s.last_errors.map(e => `
+        <div class="err-item">
+          <span class="ts">${esc(e.ts)}</span>
+          <span class="what">${esc(e.stop_stage || e.stage)}</span>
+          ${e.disease ? "«" + esc(e.disease) + "»" : ""}
+          ${esc(e.error)}
+        </div>`).join("")
+      : '<span class="muted">за период ошибок нет</span>';
+  } catch (e) {
+    document.getElementById("last-errors").innerHTML =
+      '<span class="bad">/api/stats недоступен: ' + esc(e) + "</span>";
+  }
+}
+
+refreshHealth();
+refreshStats();
+setInterval(refreshHealth, REFRESH_MS);
+setInterval(refreshStats, REFRESH_MS);
+</script>
+</body>
+</html>

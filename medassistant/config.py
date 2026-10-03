@@ -46,6 +46,13 @@ HISTORY_WINDOW = int(os.environ.get("HISTORY_WINDOW", "6"))
 DISEASE_CAP = int(os.environ.get("DISEASE_CAP", "3"))
 TOP_K = int(os.environ.get("TOP_K", "5"))
 
+# Housekeeping (owner decision 2026-10-02: laptop-only, built-in): rotate the
+# JSONL audit log by size; timestamped backups of the sessions DB at server
+# startup (physician questions are sensitive — backups stay on this machine).
+AUDIT_ROTATE_MB = float(os.environ.get("AUDIT_ROTATE_MB", "10"))
+AUDIT_KEEP = int(os.environ.get("AUDIT_KEEP", "3"))
+SESSIONS_BACKUP_KEEP = int(os.environ.get("SESSIONS_BACKUP_KEEP", "5"))
+
 # Auto-pick (owner decision 2026-09-29): when one search candidate clearly
 # dominates, skip labeler call 2 and take it. AUTO_PICK=0 disables.
 AUTO_PICK = os.environ.get("AUTO_PICK", "1") not in {"0", "false", "no"}

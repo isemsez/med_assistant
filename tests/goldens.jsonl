@@ -1,0 +1,23 @@
+# Golden set for `python -m medassistant regression` (live endpoints, manual
+# pre-ship run). Matching is substring-on-name: version codes and adult/pediatric
+# variants shift across register refreshes, names do not.
+#
+# search tier: {"disease", "expect_name_contains"} — deterministic top-1 over
+#              the real index (abbreviation expansion exercised).
+# full tier:   {"question", "expect_status"?, "expect_name_contains"?} — the
+#              whole pipeline incl. answerer generation (slow on CPU).
+
+{"disease": "ХСН", "expect_name_contains": "недостаточн"}
+{"disease": "хроническая обструктивная болезнь легких", "expect_name_contains": "обструктивная болезнь легких"}
+{"disease": "сахарный диабет 2 типа", "expect_name_contains": "диабет 2 типа"}
+{"disease": "фибрилляция предсердий", "expect_name_contains": "фибрилляция"}
+{"disease": "железодефицитная анемия", "expect_name_contains": "железодефицитная"}
+{"disease": "бронхиальная астма", "expect_name_contains": "астма"}
+{"disease": "ишемическая болезнь сердца", "expect_name_contains": "ишемическая болезнь сердца"}
+{"disease": "ХБП", "expect_name_contains": "болезнь почек"}
+
+{"question": "Какие критерии диагностики хронической сердечной недостаточности?", "expect_name_contains": "недостаточн"}
+{"question": "Как диагностировать и лечить сахарный диабет 2 типа у взрослых?", "expect_name_contains": "диабет 2 типа"}
+{"question": "Какие рекомендации по лечению внебольничной пневмонии у взрослых?", "expect_name_contains": "пневмония"}
+{"question": "Как диагностировать и лечить мочекаменную болезнь?", "expect_name_contains": "мочекаменная"}
+{"question": "Как оформить больничный лист пациенту?", "expect_status": "no_disease"}

@@ -7,12 +7,22 @@ abbreviation expansions), cosine top-K cards [{code_version, name, score}].
 Cards never contain URLs — the model picks ids, Python renders URLs.
 """
 
+import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
 
 from . import llm
+
+
+def docs_hash(docs):
+    """Canonical content hash of a docs_meta dict (build/health must agree).
+
+    Order-independent (sort_keys) so a reordered register is not 'stale'.
+    """
+    blob = json.dumps(docs, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 
 
 def doc_texts(meta):
@@ -45,8 +55,12 @@ def build_index(docs, embed_endpoint, out_dir, batch=64):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     np.save(out / "vectors.npy", mat)
+    # freshness stamp: health compares it against the current docs_meta
+    # content — a refreshed register without build-index shows up as stale
     (out / "meta.json").write_text(
-        json.dumps({"dim": int(mat.shape[1]), "rows": rows}, ensure_ascii=False),
+        json.dumps({"dim": int(mat.shape[1]), "rows": rows,
+                    "docs_meta_sha1": docs_hash(docs),
+                    "docs_meta_count": len(docs)}, ensure_ascii=False),
         encoding="utf-8")
     return len(docs), len(rows)
 

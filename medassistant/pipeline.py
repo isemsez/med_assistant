@@ -7,6 +7,7 @@ Stage functions are injectable for offline tests and CLI mock runs.
 """
 
 import json
+import time
 
 from . import appendix, config, llm, prompts
 
@@ -89,20 +90,20 @@ class Pipeline:
                 + list(history or [])
                 + [{"role": "user", "content": question}])
 
-    def stream_answer(self, question, history=None):
+    def stream_answer(self, question, history=None, max_tokens=None):
         """Yield answerer events: {"type": "reasoning"|"content", "text": ...}.
         Raises llm.LLMError on transport failure."""
         config.require(self.candidate, "CANDIDATE")
         yield from llm.chat_stream(
             self.candidate, self._messages(question, history),
-            max_tokens=config.ANSWERER_MAX_TOKENS)
+            max_tokens=max_tokens or config.ANSWERER_MAX_TOKENS)
 
-    def answer(self, question, history=None):
+    def answer(self, question, history=None, max_tokens=None):
         """Non-streaming answer (whole string)."""
         config.require(self.candidate, "CANDIDATE")
         return llm.chat(
             self.candidate, self._messages(question, history),
-            max_tokens=config.ANSWERER_MAX_TOKENS)
+            max_tokens=max_tokens or config.ANSWERER_MAX_TOKENS)
 
     # -- labeler calls ----------------------------------------------------
 
@@ -123,12 +124,14 @@ class Pipeline:
                             json_mode=True)
 
     def _real_extract(self, question, answer):
+        t0 = time.monotonic()
         raw = self._labeler_chat(prompts.SYSTEM_LABELER_EXTRACT,
                                  _extract_user(question, answer),
                                  config.LABELER_EXTRACT_MAX_TOKENS,
                                  EXTRACT_SCHEMA)
         if self.audit:
-            self.audit.log("labeler_extract", raw=raw)
+            self.audit.log("labeler_extract", raw=raw,
+                           dur_s=round(time.monotonic() - t0, 2))
         try:
             data = llm.parse_json_object(raw)
             diseases = data["diseases"]
@@ -155,12 +158,14 @@ class Pipeline:
         return self.index.search(variants, self.embed, top_k=config.TOP_K)
 
     def _real_select(self, question, answer, disease, cards):
+        t0 = time.monotonic()
         raw = self._labeler_chat(prompts.SYSTEM_LABELER_SELECT,
                                  _select_user(question, answer, disease, cards),
                                  config.LABELER_SELECT_MAX_TOKENS,
                                  SELECT_SCHEMA)
         if self.audit:
-            self.audit.log("labeler_select", disease=disease, raw=raw)
+            self.audit.log("labeler_select", disease=disease, raw=raw,
+                           dur_s=round(time.monotonic() - t0, 2))
         try:
             data = llm.parse_json_object(raw)
             picks = data["picks"]
@@ -220,7 +225,7 @@ class Pipeline:
                 diseases = extract(question, raw_answer)
             except llm.LLMError as e:
                 if self.audit:
-                    self.audit.log("stage_stop", stage="labeler_extract",
+                    self.audit.log("stage_stop", stop_stage="labeler_extract",
                                    session_id=session_id, error=str(e))
                 yield {"stage": "done", "result": AppendixResult(
                     "extract_error", notes=[appendix.NOTE_EXTRACT_ERROR])}
@@ -253,11 +258,12 @@ class Pipeline:
             variants = (self.abbr_map.variants(disease)
                         if self.abbr_map is not None else [disease])
             yield {"stage": "search", "disease": disease}
+            t_search = time.monotonic()
             try:
                 cards = search(variants)
             except llm.LLMError as e:
                 if self.audit:
-                    self.audit.log("stage_stop", stage="search", disease=disease,
+                    self.audit.log("stage_stop", stop_stage="search", disease=disease,
                                    session_id=session_id, error=str(e))
                 yield {"stage": "done", "result": AppendixResult(
                     "search_error", diseases=processed, dropped=dropped,
@@ -266,7 +272,8 @@ class Pipeline:
             if self.audit:
                 self.audit.log("search", disease=disease, session_id=session_id,
                                variants=variants,
-                               cards=[c["code_version"] for c in cards])
+                               cards=[c["code_version"] for c in cards],
+                               dur_s=round(time.monotonic() - t_search, 2))
             if not cards:
                 continue
 
@@ -295,7 +302,7 @@ class Pipeline:
                     picks = select(question, raw_answer, disease, cards)
                 except llm.LLMError as e:
                     if self.audit:
-                        self.audit.log("stage_stop", stage="labeler_select",
+                        self.audit.log("stage_stop", stop_stage="labeler_select",
                                        disease=disease, session_id=session_id,
                                        error=str(e))
                     yield {"stage": "done", "result": AppendixResult(

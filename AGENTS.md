@@ -25,14 +25,20 @@ and that candidate is auto-picked (marked «автоподбор»).
 
 ```
 medassistant/            runtime package (config, llm, prompts, abbr, gindex,
-                         pipeline, appendix, audit, store, cli, server/)
+                         pipeline, appendix, audit, store, health, stats,
+                         canary, regression, cli, server/)
 data/docs_meta.json      register metadata, 757 guidelines (copied from gp-eval)
 data/abbr2term.yaml      4,508 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
-data/index/              built embedding index (vectors.npy + meta.json)
+data/index/              built embedding index (vectors.npy + meta.json with a
+                         docs_meta freshness stamp)
 data/sessions.sqlite     persistent chat sessions
-logs/audit.jsonl         one record per pipeline stage per turn
-tests/                   offline unit tests
+data/backups/            startup backups of sessions.sqlite (newest 5 kept)
+logs/audit.jsonl         one record per pipeline stage per turn (size-rotated,
+                         3 generations)
+logs/ollama-<inst>-<stamp>.*.log  per-boot Ollama logs (5 latest boots kept)
+logs/web-<stamp>.*.log       per-boot web app logs (5 latest boots kept)
+tests/                   offline unit tests + goldens.jsonl (live regression)
 ```
 
 ## Setup
@@ -51,8 +57,10 @@ Models (from the gp-eval runbook; per README §5 of gp-eval):
   otherwise reasoning eats the token budget and content comes back empty)
 - env once: `setx OLLAMA_IGPU_ENABLE 1`, `setx OLLAMA_MAX_LOADED_MODELS 2`,
   then restart Ollama; after each reboot start everything with
-  `powershell -File scripts\start_assistant.ps1` (starts both Ollama instances if
-  down, then the web app)
+  `powershell -File scripts\start_assistant.ps1` (toggle: when everything is
+  down it starts both Ollama instances, runs the startup canary, then the
+  web app; re-run while up STOPS it all; `-SkipWeb` = backends only,
+  `-Foreground` = web app in the console)
 
 ## Build the index (once, needs the embed endpoint)
 
@@ -66,9 +74,19 @@ Rebuild after dropping in a refreshed `data/docs_meta.json`.
 ## Run
 
 ```powershell
-powershell -File scripts\start_assistant.ps1    # starts Ollama if down + web app
-# -> http://127.0.0.1:8866
+powershell -File scripts\start_assistant.ps1    # toggle: all down -> starts
+                                                 # Ollama + canary + web app
+                                                 # -> http://127.0.0.1:8866;
+                                                 # any up -> stops everything
+powershell -File scripts\start_assistant.ps1 -SkipCanary   # skip startup check
+powershell -File scripts\start_assistant.ps1 -SkipWeb      # Ollama backends only
+powershell -File scripts\start_assistant.ps1 -Foreground   # web app in this
+                                             # console (Ctrl+C stops only it)
 ```
+
+The startup canary verifies the whole chain (3 endpoints, index freshness,
+corpus, one E2E question — expect minutes on first boot while models load)
+before the web app starts; on failure it prints the failing check and exits.
 
 If both Ollama instances are already up, the web app alone:
 
@@ -76,8 +94,10 @@ If both Ollama instances are already up, the web app alone:
 uvicorn medassistant.server:app --host 127.0.0.1 --port 8866
 ```
 
-(Port 8866 is chosen to avoid common Docker binds; Ollama instances started
-by the script run windowless, logging to `logs/ollama-*.log`.)
+(Port 8866 is chosen to avoid common Docker binds; the script runs everything
+windowless with per-boot logs — `logs/ollama-<inst>-<stamp>.*.log` and, for
+the background web app, `logs/web-<stamp>.*.log`; the 5 latest boots are
+kept. The `uvicorn ...` line above is the manual equivalent.)
 
 CLI (same pipeline, no GUI):
 
@@ -90,11 +110,36 @@ python -m medassistant ask --answer-file mock.jsonl   # appendix machinery over
 `mock.jsonl` rows: `{"question", "raw_answer"}` (live labeler + search) or with
 `"diseases"` (skips labeler 1) or `"picks"` (renderer-only, fully offline).
 
+## Observability (owner decision 2026-10-02: laptop-only, built-in)
+
+- `GET /api/health` — answerer/labeler/embed endpoints, index freshness vs
+  `docs_meta.json`, PDF corpus; results cached 30 s (`HEALTH_CACHE_S`).
+- `http://127.0.0.1:8866/admin` — status page: health checks, usage/error
+  counters and stage latency from `logs/audit.jsonl` (`GET /api/stats?days=N`),
+  auto-refresh 30 s. No auth — localhost only.
+- `python -m medassistant canary` — the same checks plus one E2E question
+  through the real pipeline (`--no-e2e` for fast checks only); exit 1 on
+  failure. Wired into `start_assistant.ps1`.
+- `python -m medassistant regression` — `tests/goldens.jsonl` against live
+  endpoints: deterministic search-tier rows (disease → expected top-1
+  guideline) and full-tier rows (question → whole pipeline, tolerant name
+  matching). Manual pre-ship step; full tier is minutes per question on CPU —
+  `--tier search` runs the fast deterministic rows only.
+
+Housekeeping: `audit.jsonl` size-rotates (`AUDIT_ROTATE_MB`/`AUDIT_KEEP`,
+default 10 MB × 3); `sessions.sqlite` is WAL-checkpointed and copied to
+`data/backups/` at every server startup (`SESSIONS_BACKUP_KEEP`, default 5 —
+physician conversations are sensitive, backups stay local); Ollama and web
+app logs are per-boot timestamped, 5 latest boots kept.
+
 ## Tests
 
 ```powershell
 python -m unittest discover -s tests    # offline, no endpoints needed
 ```
+
+Pre-ship checklist: the offline suite above, then `python -m medassistant
+canary`, then `python -m medassistant regression` (both live, minutes on CPU).
 
 ## Notes
 

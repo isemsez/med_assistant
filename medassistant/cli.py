@@ -7,6 +7,9 @@ Commands:
                                (JSONL rows: {question, raw_answer[, diseases[, picks]]};
                                `diseases` stubs labeler 1, `picks` stubs labeler 2)
   search --name "…"            debug: guideline search tool alone (needs embed)
+  canary                       health checks + one E2E question through the
+                               real pipeline; exit 1 on failure
+  regression [--goldens F]     golden set against live endpoints (pre-ship)
 """
 
 import argparse
@@ -98,6 +101,7 @@ def cmd_ask(args):
     aud.log("question", session_id=session_id, question=args.question)
 
     parts = []
+    t_answer = time.monotonic()
     try:
         shown_thinking = False
         for event in pipe.stream_answer(args.question, history):
@@ -113,11 +117,12 @@ def cmd_ask(args):
                 print(event["text"], end="", flush=True)
         print()
     except llm.LLMError as e:
-        aud.log("stage_stop", stage="answerer", session_id=session_id, error=str(e))
+        aud.log("stage_stop", stop_stage="answerer", session_id=session_id, error=str(e))
         print(f"\n[сбой ответа] {e}", file=sys.stderr)
         raise SystemExit(1)
     raw_answer = "".join(parts)
-    aud.log("raw_answer", session_id=session_id, answer=raw_answer)
+    aud.log("raw_answer", session_id=session_id, answer=raw_answer,
+            dur_s=round(time.monotonic() - t_answer, 2))
 
     result = None
     for ev in pipe.iter_appendix(args.question, raw_answer, session_id=session_id):
@@ -137,6 +142,20 @@ def cmd_ask(args):
 def _load_pipeline(aud):
     from .pipeline import load_pipeline
     return load_pipeline(audit=aud)
+
+
+def cmd_canary(args):
+    from . import canary
+    ok = canary.main(e2e=not args.no_e2e, max_tokens=args.max_tokens)
+    if not ok:
+        raise SystemExit(1)
+
+
+def cmd_regression(args):
+    from . import regression
+    ok = regression.run(args.goldens, max_tokens=args.max_tokens, tier=args.tier)
+    if not ok:
+        raise SystemExit(1)
 
 
 def main(argv=None):
@@ -162,6 +181,22 @@ def main(argv=None):
     a.add_argument("--save", action="store_true",
                    help="store the exchange in the sessions DB")
     a.set_defaults(func=cmd_ask)
+
+    c = sub.add_parser("canary", help="health checks + one E2E question")
+    c.add_argument("--no-e2e", action="store_true",
+                   help="health checks only (fast, no model generation)")
+    c.add_argument("--max-tokens", type=int, default=3072,
+                   help="answerer token budget for the E2E question "
+                        "(thinking needs headroom; production chats may differ)")
+    c.set_defaults(func=cmd_canary)
+
+    rg = sub.add_parser("regression", help="golden set against live endpoints")
+    rg.add_argument("--goldens", default=str(config.PROJECT_ROOT / "tests" / "goldens.jsonl"))
+    rg.add_argument("--max-tokens", type=int, default=3072,
+                    help="answerer token budget per golden question")
+    rg.add_argument("--tier", choices=("all", "search", "full"), default="all",
+                    help="run only one tier (search = deterministic + fast)")
+    rg.set_defaults(func=cmd_regression)
 
     args = p.parse_args(argv)
     args.func(args)
