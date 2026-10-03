@@ -124,7 +124,11 @@ python -m medassistant ask --answer-file mock.jsonl   # appendix machinery over
   endpoints: deterministic search-tier rows (disease → expected top-1
   guideline) and full-tier rows (question → whole pipeline, tolerant name
   matching). Manual pre-ship step; full tier is minutes per question on CPU —
-  `--tier search` runs the fast deterministic rows only.
+  `--tier search` runs the fast deterministic rows only. Known flake source:
+  the answerer's thinking occasionally consumes the whole token budget and
+  the row fails with "empty answer twice" — rerun, and consider raising
+  `ANSWERER_MAX_TOKENS` if it repeats (thinking length varies run to run
+  even at temperature 0).
 
 Housekeeping: `audit.jsonl` size-rotates (`AUDIT_ROTATE_MB`/`AUDIT_KEEP`,
 default 10 MB × 3); `sessions.sqlite` is WAL-checkpointed and copied to
