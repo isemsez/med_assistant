@@ -61,21 +61,36 @@ class TestCheckModel(unittest.TestCase):
 class TestCheckEmbed(unittest.TestCase):
     def setUp(self):
         self._post = httpx.post
+        self.bodies = []
 
     def tearDown(self):
         httpx.post = self._post
         health._cache.clear()
 
+    def _patch(self, payload):
+        def fake_post(url, **kw):
+            self.bodies.append(kw.get("content"))
+            return FakeResp(payload=payload)
+        httpx.post = fake_post
+
     def test_ok(self):
-        httpx.post = lambda *a, **kw: FakeResp(
-            payload={"data": [{"index": 0, "embedding": [0.1, 0.2]}]})
+        self._patch({"data": [{"index": 0, "embedding": [0.1, 0.2]}]})
         r = health.check_embed(EP)
         self.assertTrue(r["ok"])
         self.assertEqual(r["dim"], 2)
 
     def test_empty_embedding(self):
-        httpx.post = lambda *a, **kw: FakeResp(payload={"data": [{"embedding": []}]})
+        self._patch({"data": [{"embedding": []}]})
         self.assertFalse(health.check_embed(EP)["ok"])
+
+    def test_extra_body_merged_like_production(self):
+        ep = dict(EP, extra_body={"vendor_switch": True})
+        self._patch({"data": [{"index": 0, "embedding": [0.1]}]})
+        self.assertTrue(health.check_embed(ep)["ok"])
+        body = json.loads(self.bodies[0])
+        self.assertEqual(body["vendor_switch"], True)
+        self.assertEqual(body["model"], "m")
+        self.assertEqual(body["input"], ["пинг"])
 
 
 class TestCheckIndex(unittest.TestCase):
@@ -177,6 +192,39 @@ class TestRunHealth(unittest.TestCase):
             self.assertEqual(calls["n"], 6)
         finally:
             health.check_model, health.check_embed = orig
+            health._cache.clear()
+
+    def test_single_flight_under_threads(self):
+        import threading
+        calls = {"n": 0}
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow():
+            calls["n"] += 1
+            entered.set()
+            release.wait(2)
+            return {"ok": True}
+
+        results = [None, None]
+
+        def run(i):
+            results[i] = health._cached("probe", slow, ttl=30)
+
+        t1 = threading.Thread(target=run, args=(0,))
+        t1.start()
+        self.assertTrue(entered.wait(2))
+        t2 = threading.Thread(target=run, args=(1,))
+        t2.start()
+        import time as _time
+        _time.sleep(0.2)  # t2 must block on the in-flight probe, not re-run it
+        release.set()
+        t1.join(2)
+        t2.join(2)
+        try:
+            self.assertEqual(calls["n"], 1)
+            self.assertEqual(results, [{"ok": True}, {"ok": True}])
+        finally:
             health._cache.clear()
 
 

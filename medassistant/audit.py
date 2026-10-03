@@ -4,19 +4,29 @@ picks — for auditability).
 
 Size-based rotation: when the active file crosses AUDIT_ROTATE_MB it shifts to
 ``audit.jsonl.1`` (up to AUDIT_KEEP generations) — the file must never eat the
-laptop disk. Stats read all generations.
+laptop disk. Stats read all generations. Writes are serialized by a lock (the
+Audit instance is shared across request threads) and a rotation that fails
+(e.g. a concurrent stats reader holds the file open on Windows) is skipped,
+not raised — the next write retries it.
 """
 
 import datetime
 import json
 import os
+import threading
 from pathlib import Path
 
 from . import config
 
 
-def _ts():
+def utc_ts():
+    """One timestamp format across audit/store/health — stats._parse_ts
+    round-trips exactly this, so it must never diverge per copy."""
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+# back-compat alias for older imports
+_ts = utc_ts
 
 
 class Audit:
@@ -26,6 +36,7 @@ class Audit:
         self.max_bytes = (max_bytes if max_bytes is not None
                           else config.AUDIT_ROTATE_MB * 1024 * 1024)
         self.keep = keep if keep is not None else config.AUDIT_KEEP
+        self._lock = threading.Lock()
 
     def _rotated(self, i):
         return self.path.parent / f"{self.path.name}.{i}"
@@ -38,14 +49,18 @@ class Audit:
         self.path.replace(self._rotated(1))
 
     def log(self, stage, session_id=None, **fields):
-        if (self.max_bytes and self.keep > 0 and self.path.exists()
-                and self.path.stat().st_size > self.max_bytes):
-            self._rotate()
-        rec = {"ts": _ts(), "stage": stage}
+        rec = {"ts": utc_ts(), "stage": stage}
         if session_id is not None:
             rec["session_id"] = session_id
         rec.update(fields)
-        with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        with self._lock:
+            if (self.max_bytes and self.keep > 0 and self.path.exists()
+                    and self.path.stat().st_size > self.max_bytes):
+                try:
+                    self._rotate()
+                except OSError:
+                    pass  # rotation is best-effort; appending must never fail
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())

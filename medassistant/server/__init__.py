@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import audit as audit_mod
+from .. import store as store_mod
 from .. import appendix, config, health, llm, stats
 from ..pipeline import load_pipeline
 from ..store import load_store
@@ -36,7 +37,7 @@ def _wire():
     app.state.audit = audit_mod.Audit(config.AUDIT_LOG_PATH)
     app.state.store = load_store()
     try:
-        store.backup()
+        store_mod.backup()
     except Exception as e:  # a failed backup must never block the app
         app.state.audit.log("backup_failed", error=str(e))
     app.state.pipe = load_pipeline(audit=app.state.audit)

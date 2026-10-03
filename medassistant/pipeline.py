@@ -99,7 +99,8 @@ class Pipeline:
             max_tokens=max_tokens or config.ANSWERER_MAX_TOKENS)
 
     def answer(self, question, history=None, max_tokens=None):
-        """Non-streaming answer (whole string)."""
+        """Non-streaming answer (whole string). Diagnostic probe for budget/
+        timeout experiments — the product paths stream via stream_answer."""
         config.require(self.candidate, "CANDIDATE")
         return llm.chat(
             self.candidate, self._messages(question, history),

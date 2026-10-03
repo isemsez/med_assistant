@@ -1,47 +1,43 @@
 """Health checks: the three LLM endpoints, index freshness, PDF corpus.
 
 Designed for /api/health and the canary CLI. Endpoint probes use plain httpx
-with a short timeout and NO retries — a health check must fail fast. Results
-are cached for HEALTH_CACHE_S seconds so the admin page can poll without
-hammering the models (a cache_ttl of 0 disables caching).
+with a short timeout and NO retries — a health check must fail fast — but
+share request construction (headers, extra_body merge) with the real client
+in llm.py, so a probe verdict can never diverge from production behavior.
+Results are cached for HEALTH_CACHE_S seconds so the admin page can poll
+without hammering the models; the cache is single-flight (one probe per key
+even under concurrent requests). A cache_ttl of 0 disables caching.
 """
 
 import datetime
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
 import httpx
 
-from . import config, gindex
+from . import config, gindex, llm
+from .audit import utc_ts
 
 CACHE_TTL = float(os.environ.get("HEALTH_CACHE_S", "30"))
 _cache = {}  # key -> (monotonic ts, value)
-
-
-def _ts():
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+_cache_lock = threading.Lock()
 
 
 def _cached(key, fn, ttl=None):
     ttl = CACHE_TTL if ttl is None else ttl
     if ttl <= 0:
         return fn()
-    now = time.monotonic()
-    hit = _cache.get(key)
-    if hit is not None and now - hit[0] < ttl:
-        return hit[1]
-    val = fn()
-    _cache[key] = (now, val)
-    return val
-
-
-def _headers(endpoint):
-    h = {"Content-Type": "application/json"}
-    if endpoint.get("api_key"):
-        h["Authorization"] = f"Bearer {endpoint['api_key']}"
-    return h
+    with _cache_lock:  # single-flight: concurrent callers await one probe
+        now = time.monotonic()
+        hit = _cache.get(key)
+        if hit is not None and now - hit[0] < ttl:
+            return hit[1]
+        val = fn()
+        _cache[key] = (now, val)
+        return val
 
 
 def check_model(endpoint, timeout=5.0):
@@ -50,7 +46,7 @@ def check_model(endpoint, timeout=5.0):
         return {"ok": False, "error": "endpoint not configured"}
     url = f"{endpoint['base_url']}/models"
     try:
-        r = httpx.get(url, headers=_headers(endpoint), timeout=timeout)
+        r = httpx.get(url, headers=llm._headers(endpoint), timeout=timeout)
         r.raise_for_status()
         data = r.json()
         entries = data.get("data") or data.get("models") or []
@@ -66,15 +62,20 @@ def check_model(endpoint, timeout=5.0):
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-def check_embed(endpoint, timeout=20.0):
-    """A one-token embed ping must return a vector."""
+def check_embed(endpoint, timeout=120.0):
+    """A one-token embed ping must return a vector.
+
+    The generous default matches llm.embed: on a cold boot this probe is the
+    first /embeddings request and pays the bge-m3 model load.
+    """
     if not endpoint.get("base_url") or not endpoint.get("model"):
         return {"ok": False, "error": "endpoint not configured"}
     url = f"{endpoint['base_url']}/embeddings"
+    body = json.dumps(llm._payload(endpoint, input=["пинг"]),
+                      ensure_ascii=False).encode("utf-8")
     try:
-        r = httpx.post(url, headers=_headers(endpoint), timeout=timeout,
-                       content=json.dumps({"model": endpoint["model"],
-                                           "input": ["пинг"]}))
+        r = httpx.post(url, headers=llm._headers(endpoint), timeout=timeout,
+                       content=body)
         r.raise_for_status()
         data = r.json()
         vecs = data.get("data") or []
@@ -135,10 +136,12 @@ def run_health(force=False, cache_ttl=None):
                                    ttl=cache_ttl),
         "embed": lambda: _cached("embed", lambda: check_embed(config.EMBED),
                                  ttl=cache_ttl),
-        "index": lambda: check_index(),
+        "index": lambda: _cached("index", check_index, ttl=cache_ttl),
         "corpus": lambda: _cached("corpus", check_corpus, ttl=cache_ttl),
     }
     if force:
-        _cache.clear()
+        with _cache_lock:
+            _cache.clear()
     out = {name: fn() for name, fn in checks.items()}
-    return {"ok": all(c.get("ok") for c in out.values()), "ts": _ts(), "checks": out}
+    return {"ok": all(c.get("ok") for c in out.values()), "ts": utc_ts(),
+            "checks": out}

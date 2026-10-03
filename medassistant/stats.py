@@ -32,38 +32,63 @@ def _mean(xs):
     return round(sum(xs) / len(xs), 2) if xs else None
 
 
+def _audit_files(p):
+    """Active file plus rotated generations, oldest first (newest last)."""
+    files = []
+    rotated = []
+    for f in p.parent.glob(p.name + ".*"):
+        suffix = f.name[len(p.name) + 1:]
+        if suffix.isdigit():
+            rotated.append((int(suffix), f))
+    rotated.sort(reverse=True)  # .N (oldest) .. .1
+    files.extend(f for _, f in rotated)
+    files.append(p)
+    return files
+
+
 def read_records(path, days=None, now=None):
-    """Records inside the trailing window (newest last). days=None keeps all."""
+    """Records inside the trailing window across ALL generations.
+
+    Returns (records, skipped): records are newest-last; skipped counts lines
+    that were valid enough to open but unusable (bad JSON, unparseable ts
+    inside the file). days=None keeps all.
+    """
     p = Path(path)
     if not p.is_file():
-        return []
+        return [], 0
     if days is not None:
         now = now or datetime.datetime.now(datetime.timezone.utc)
         cutoff = now - datetime.timedelta(days=days)
-    out = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+    out, skipped = [], 0
+    for f in _audit_files(p):
+        if not f.is_file():
             continue
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        if days is not None:
-            ts = _parse_ts(rec)
-            if ts is None or ts < cutoff:
+        for line in f.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
                 continue
-        out.append(rec)
-    return out
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                skipped += 1
+                continue
+            if days is not None:
+                ts = _parse_ts(rec)
+                if ts is None or ts < cutoff:
+                    if ts is None:
+                        skipped += 1
+                    continue
+            out.append(rec)
+    return out, skipped
 
 
 def collect(path, days=7, now=None):
-    records = read_records(path, days=days, now=now)
+    records, skipped = read_records(path, days=days, now=now)
     stages = Counter(r.get("stage") for r in records)
 
     status = Counter(r.get("status") for r in records
                      if r.get("stage") == "appendix_done")
-    stops = Counter((r.get("stop_stage") or r.get("stage") or "?")
+    stops = Counter((r.get("stop_stage") or "?")
                     for r in records if r.get("stage") == "stage_stop")
     picks_recs = [r for r in records if r.get("stage") == "picks"]
     auto = sum(1 for r in picks_recs if r.get("auto"))
@@ -88,6 +113,7 @@ def collect(path, days=7, now=None):
 
     return {
         "window_days": days,
+        "skipped_records": skipped,
         "turns": stages.get("question", 0),
         "answers": stages.get("raw_answer", 0),
         "appendix_status": dict(status),

@@ -13,6 +13,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from .audit import utc_ts
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,10 +35,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
 """
 
 TITLE_MAX = 60
-
-
-def _ts():
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
 class Store:
@@ -65,7 +63,7 @@ class Store:
     # -- sessions ---------------------------------------------------------
 
     def create_session(self, title=""):
-        now = _ts()
+        now = utc_ts()
         with self._lock:
             cur = self.conn.execute(
                 "INSERT INTO sessions (title, created_at, updated_at) VALUES (?,?,?)",
@@ -80,7 +78,7 @@ class Store:
                 "UPDATE sessions SET updated_at=?, "
                 "title=CASE WHEN title='' AND ? IS NOT NULL THEN ? ELSE title END "
                 "WHERE id=?",
-                (_ts(), title, title, session_id))
+                (utc_ts(), title, title, session_id))
             self.conn.commit()
 
     def list_sessions(self):
@@ -114,7 +112,7 @@ class Store:
 
     def add_message(self, session_id, role, content, appendix_payload=None,
                     reasoning=None):
-        now = _ts()
+        now = utc_ts()
         appendix_json = (json.dumps(appendix_payload, ensure_ascii=False)
                          if appendix_payload is not None else None)
         with self._lock:
@@ -173,7 +171,7 @@ class Store:
                 (session_id, message_id))
             self.conn.execute(
                 "UPDATE sessions SET updated_at=? WHERE id=?",
-                (_ts(), session_id))
+                (utc_ts(), session_id))
             self.conn.commit()
             return cur.rowcount
 

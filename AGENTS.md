@@ -58,9 +58,9 @@ Models (from the gp-eval runbook; per README §5 of gp-eval):
 - env once: `setx OLLAMA_IGPU_ENABLE 1`, `setx OLLAMA_MAX_LOADED_MODELS 2`,
   then restart Ollama; after each reboot start everything with
   `powershell -File scripts\start_assistant.ps1` (toggle: when everything is
-  down it starts both Ollama instances, runs the startup canary, then the
-  web app; re-run while up STOPS it all; `-SkipWeb` = backends only,
-  `-Foreground` = web app in the console)
+  down it starts both Ollama instances and the web app; re-run while up
+  STOPS it all; `-SkipWeb` = backends only, `-Foreground` = web app in the
+  console)
 
 ## Build the index (once, needs the embed endpoint)
 
@@ -75,18 +75,20 @@ Rebuild after dropping in a refreshed `data/docs_meta.json`.
 
 ```powershell
 powershell -File scripts\start_assistant.ps1    # toggle: all down -> starts
-                                                 # Ollama + canary + web app
+                                                 # Ollama + web app
                                                  # -> http://127.0.0.1:8866;
                                                  # any up -> stops everything
-powershell -File scripts\start_assistant.ps1 -SkipCanary   # skip startup check
 powershell -File scripts\start_assistant.ps1 -SkipWeb      # Ollama backends only
 powershell -File scripts\start_assistant.ps1 -Foreground   # web app in this
                                              # console (Ctrl+C stops only it)
 ```
 
-The startup canary verifies the whole chain (3 endpoints, index freshness,
-corpus, one E2E question — expect minutes on first boot while models load)
-before the web app starts; on failure it prints the failing check and exits.
+The startup script does NOT run the canary (minutes on CPU; owner decision
+2026-10-03) — the web app comes up fast and the first question is slow while
+models load. Verify the whole chain (3 endpoints, index freshness, corpus,
+one E2E question) manually when needed: `python -m medassistant canary`
+(`--no-e2e` for the fast checks only); it prints the failing check and exits
+1 on failure.
 
 If both Ollama instances are already up, the web app alone:
 
@@ -119,7 +121,8 @@ python -m medassistant ask --answer-file mock.jsonl   # appendix machinery over
   auto-refresh 30 s. No auth — localhost only.
 - `python -m medassistant canary` — the same checks plus one E2E question
   through the real pipeline (`--no-e2e` for fast checks only); exit 1 on
-  failure. Wired into `start_assistant.ps1`.
+  failure. Manual command — not run by `start_assistant.ps1` (too slow to
+  block every boot; owner decision 2026-10-03).
 - `python -m medassistant regression` — `tests/goldens.jsonl` against live
   endpoints: deterministic search-tier rows (disease → expected top-1
   guideline) and full-tier rows (question → whole pipeline, tolerant name

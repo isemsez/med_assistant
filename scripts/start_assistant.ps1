@@ -6,15 +6,13 @@
 # component; if all are down, it starts them all. "Safe to re-run" no
 # longer means "no-op" - re-running a live stack stops it.
 #   powershell -File scripts\start_assistant.ps1              # start all / stop all
-#   powershell -File scripts\start_assistant.ps1 -SkipCanary  # start, skip the
-#                                                             # startup canary
 #   powershell -File scripts\start_assistant.ps1 -SkipWeb     # Ollama backends only
 #   powershell -File scripts\start_assistant.ps1 -Foreground  # start with uvicorn in
 #                                                             # this console; Ctrl+C
 #                                                             # stops only the web app
-# Start sequence: both Ollama instances -> startup canary (health checks +
-# one E2E question, minutes on first boot while models load; exit on
-# failure) -> web app.
+# Start sequence: both Ollama instances -> web app. The startup canary is
+# NOT run here (minutes on CPU); verify the chain manually when needed:
+#   python -m medassistant canary            (or: canary --no-e2e, fast)
 # Background components run windowless; every start writes per-boot logs
 # (logs/ollama-<inst>-<stamp>.*.log, logs/web-<stamp>.*.log) and prunes old
 # boots, keeping the 5 latest per component.
@@ -24,7 +22,7 @@
 # reported and left alone.
 # Requires (once, see AGENTS.md): setx OLLAMA_IGPU_ENABLE 1,
 # setx OLLAMA_MAX_LOADED_MODELS 2, models pulled, .venv built.
-param([switch]$Foreground, [switch]$SkipWeb, [switch]$SkipCanary)
+param([switch]$Foreground, [switch]$SkipWeb)
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -35,6 +33,13 @@ if (-not (Test-Path $ollamaExe)) { Write-Error "ollama.exe not found: $ollamaExe
 if (-not (Test-Path "$root\.env")) { Write-Warning ".env missing - copy .env.example .env" }
 if (-not (Test-Path "$root\logs")) { New-Item -ItemType Directory "$root\logs" | Out-Null }
 $bootStamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
+# one-time cleanup: pre-toggle log names (ollama-main.out.log etc.) that the
+# per-boot pruning filter no longer matches
+"ollama-main.out.log", "ollama-main.err.log",
+"ollama-labeler.out.log", "ollama-labeler.err.log" | ForEach-Object {
+    Remove-Item "$root\logs\$_" -Force -ErrorAction SilentlyContinue
+}
 
 function Test-PortOpen([int]$port) {
     $c = [Net.Sockets.TcpClient]::new()
@@ -102,8 +107,8 @@ if ($SkipWeb) { $components = @($components | Where-Object { $_.Port -ne $webPor
 # --- toggle: if anything managed is up, stop everything managed ------------
 $up = @($components | Where-Object { Test-PortOpen $_.Port })
 if ($up.Count -gt 0) {
-    if ($Foreground -or $SkipCanary) {
-        Write-Warning "-Foreground/-SkipCanary apply only to starting; stopping instead."
+    if ($Foreground) {
+        Write-Warning "-Foreground applies only to starting; stopping instead."
     }
     "Stopping assistant (re-run to start again):"
     foreach ($c in $components) { Stop-ByPort $c.Port $c.Proc $c.Label }
@@ -136,21 +141,7 @@ else {
 
 if (-not (Test-Path $py)) { Write-Error ".venv not found - see AGENTS.md Setup"; exit 1 }
 
-# 3) startup canary: health checks + one E2E question through the real
-#    pipeline (minutes on first boot while models load). On failure the
-#    canary prints the failing check; the stack stays down.
-if (-not $SkipCanary) {
-    "running startup canary..."
-    Push-Location $root
-    try { & $py -m medassistant canary }
-    finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "startup canary failed - see the failing check above (model server errors: logs\ollama-*-*.err.log)"
-        exit 1
-    }
-}
-
-# 4) web app. Run from $root: the package is not installed, uvicorn imports
+# 3) web app. Run from $root: the package is not installed, uvicorn imports
 #    medassistant from the repo root via CWD on sys.path.
 if ($SkipWeb) { "skipping web app (-SkipWeb)"; exit 0 }
 if ($Foreground) {

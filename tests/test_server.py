@@ -281,6 +281,13 @@ class TestHealthRoute(Base):
 
 
 class TestStatsAndAdmin(Base):
+    def test_startup_creates_sessions_backup(self):
+        backups = list((TMP / "backups").glob("sessions-*.sqlite"))
+        self.assertGreaterEqual(len(backups), 1,
+                                "server startup must checkpoint+copy the DB")
+        audit_lines = (TMP / "audit.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn("backup_failed", audit_lines)
+
     def test_stats_reflects_chats(self):
         self.chat()
         r = self.client.get("/api/stats?days=7")

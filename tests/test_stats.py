@@ -57,9 +57,38 @@ class TestCollect(unittest.TestCase):
         self.assertEqual(s["last_errors"][1]["stop_stage"], "labeler_select")
 
     def test_legacy_stage_stop_without_stop_stage(self):
+        # pre-fix stage_stop records were never actually written (the old
+        # duplicate-kwarg call raised TypeError), but if one ever appears it
+        # must not crash aggregation
         self.write([self.rec(5, stage="stage_stop", error="x")])
         s = stats.collect(self.path, days=1, now=NOW)
-        self.assertEqual(s["stage_stop"], {"stage_stop": 1})
+        self.assertEqual(s["stage_stop"], {"?": 1})
+
+    def test_reads_rotated_generations(self):
+        old = [self.rec(60 * 24 * 3, stage="question", question="old-day3"),
+               self.rec(60 * 24 * 2, stage="stage_stop", stop_stage="search",
+                        error="e1")]
+        new = [self.rec(30, stage="question", question="recent")]
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        (self.path.parent / "audit.jsonl.2").write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in old) + "\n",
+            encoding="utf-8")
+        (self.path.parent / "audit.jsonl.1").write_text("", encoding="utf-8")
+        self.write(new)
+        s = stats.collect(self.path, days=7, now=NOW)
+        self.assertEqual(s["turns"], 2)
+        self.assertEqual(s["stage_stop"], {"search": 1})
+        self.assertEqual(s["last_errors"][0]["stop_stage"], "search")
+
+    def test_skipped_records_counted(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        (self.path.parent / "audit.jsonl.1").write_text(
+            "{broken\n" + json.dumps({"stage": "question", "ts": "not-a-date"})
+            + "\n", encoding="utf-8")
+        self.write([self.rec(5, stage="question", question="ok")])
+        s = stats.collect(self.path, days=7, now=NOW)
+        self.assertEqual(s["turns"], 1)
+        self.assertEqual(s["skipped_records"], 2)
 
     def test_bad_lines_and_missing_file(self):
         self.path.write_text("{broken\n\n" + json.dumps(

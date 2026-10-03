@@ -10,11 +10,31 @@ import time
 
 from . import config, llm
 
-# The synthetic case: a canonical abbreviated-cardiology question whose
-# expected guideline is derivable deterministically from the index.
-QUESTION = "Какие критерии диагностики хронической сердечной недостаточности?"
-DISEASE = "хроническая сердечная недостаточность"
-NAME_STEM = "недостаточност"  # covers -ость/-ости morphology
+# Fallback case, used when tests/goldens.jsonl is missing or has no coherent
+# pair; normally the case is LOADED from the goldens file so the boot-time
+# canary and the pre-ship regression verify the same rows (single source of
+# truth — stems and questions must not drift between the two).
+FALLBACK_QUESTION = "Какие критерии диагностики хронической сердечной недостаточности?"
+FALLBACK_DISEASE = "хроническая сердечная недостаточность"
+FALLBACK_STEM = "недостаточност"  # covers -ость/-ости morphology
+
+
+def _case():
+    """(question, disease, stem) from goldens: first search-tier row plus the
+    first full-tier row sharing its stem; fallback constants otherwise."""
+    try:
+        from .regression import load_goldens
+        rows = load_goldens(config.PROJECT_ROOT / "tests" / "goldens.jsonl")
+        search = next((r for r in rows if r["_tier"] == "search"), None)
+        full = next((r for r in rows if r["_tier"] == "full"
+                     and search and r.get("expect_name_contains", "").lower()
+                     == search["expect_name_contains"].lower()), None)
+        if search and full:
+            return (full["question"], search["disease"],
+                    search["expect_name_contains"].lower())
+    except (SystemExit, OSError):
+        pass
+    return FALLBACK_QUESTION, FALLBACK_DISEASE, FALLBACK_STEM
 
 
 def _fmt(check):
@@ -64,13 +84,14 @@ def answer_with_retry(pipe, question, max_tokens, progress=False):
 def e2e_phase(max_tokens):
     """One real question end-to-end; returns (ok, detail)."""
     from .pipeline import load_pipeline
+    question, disease, stem = _case()
     print(f"\n== E2E question (max {max_tokens} tokens) ==")
-    print(f"  {QUESTION}")
+    print(f"  {question}")
     pipe = load_pipeline(audit=None)
 
     t0 = time.monotonic()
-    variants = (pipe.abbr_map.variants(DISEASE)
-                if pipe.abbr_map is not None else [DISEASE])
+    variants = (pipe.abbr_map.variants(disease)
+                if pipe.abbr_map is not None else [disease])
     cards = pipe.index.search(variants, config.EMBED, top_k=config.TOP_K)
     if not cards:
         return False, "index search returned no candidates"
@@ -78,12 +99,12 @@ def e2e_phase(max_tokens):
     print(f"  expected guideline (top-1, deterministic search): "
           f"{expected['code_version']} «{expected['name']}» "
           f"score={expected['score']}")
-    if NAME_STEM not in (expected["name"] or "").lower():
-        return False, (f"top-1 search hit for «{DISEASE}» is unexpected: "
+    if stem not in (expected["name"] or "").lower():
+        return False, (f"top-1 search hit for «{disease}» is unexpected: "
                        f"«{expected['name']}» — index or embed model regressed")
 
     try:
-        answer = answer_with_retry(pipe, QUESTION, max_tokens, progress=True)
+        answer = answer_with_retry(pipe, question, max_tokens, progress=True)
     except llm.LLMError as e:
         return False, f"answerer failed: {e}"
     if not answer.strip():
@@ -91,7 +112,7 @@ def e2e_phase(max_tokens):
     print(f"  answer: {len(answer)} chars in {time.monotonic() - t0:.0f}s")
 
     t1 = time.monotonic()
-    result = pipe.run_appendix(QUESTION, answer)
+    result = pipe.run_appendix(question, answer)
     print(f"  appendix: status={result.status} in {time.monotonic() - t1:.0f}s")
     picks = [p for g in result.by_disease for p in g["picks"]]
     picked = {p["code_version"] for p in picks}
