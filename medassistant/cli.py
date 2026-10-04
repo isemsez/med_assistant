@@ -103,14 +103,13 @@ def cmd_ask(args):
         raise SystemExit(2)
     if pdf_payload is not None:
         # manual pdf turn (owner decision 2026-10-04): labeler 1 in direct
-        # mode over the payload, no answerer call
+        # mode over the payload, no answerer call; input-only — no context
+        # from the earlier conversation
         if store:
             store.add_message(session_id, "user", args.question, kind="pdf")
         aud.log("pdf_query", session_id=session_id, payload=pdf_payload)
-        answer_ctx = (store.last_message(session_id, "assistant") or ""
-                      if store else "")
         result = None
-        for ev in pipe.iter_appendix(pdf_payload, answer_ctx,
+        for ev in pipe.iter_appendix(pdf_payload, "",
                                       session_id=session_id, manual=True):
             if ev.get("stage") == "done":
                 result = ev["result"]

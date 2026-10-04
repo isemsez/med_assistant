@@ -308,9 +308,8 @@ async function send(question) {
         c.url
           ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">«${esc(c.name)}» (${esc(c.code_version)})</a>`
           : `«${esc(c.name)}» (${esc(c.code_version)})`
-      }${c.score != null ? `<span class="cand-score" title="Насколько название рекомендации похоже на запрос (косинусная близость эмбеддингов) — это НЕ вероятность правильности подбора">${Math.round(c.score * 100)}%</span>` : ""}</li>`).join("");
-      wrap.innerHTML = `<div class="caption">Кандидаты pdf — фильтрую по заболеванию «${esc(disease)}»</div>
-        <div class="src-note">% — сходство названия рекомендации с запросом, не вероятность</div>
+      }</li>`).join("");
+      wrap.innerHTML = `<div class="caption">Кандидаты pdf — фильтрую по «${esc(disease)}»</div>
         <ul>${items}</ul>`;
       insertAfter(wrap, candAnchor);
       candAnchor = wrap;

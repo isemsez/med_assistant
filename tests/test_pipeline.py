@@ -249,9 +249,9 @@ class TestIterAppendix(unittest.TestCase):
         self.assertEqual(events[2]["stage"], "select")
         self.assertEqual(events[2]["cards"], [
             {"code_version": "2_1", "name": "ХСН", "url": pdf_url("2_1"),
-             "path": str(PDF_DIR / DOCS["2_1"]["file"]), "score": 0.9},
+             "path": str(PDF_DIR / DOCS["2_1"]["file"])},
             {"code_version": "1_1", "name": "Грипп", "url": pdf_url("1_1"),
-             "path": str(PDF_DIR / DOCS["1_1"]["file"]), "score": 0.88},
+             "path": str(PDF_DIR / DOCS["1_1"]["file"])},
         ])
 
     def test_stage_sequence_extract_error(self):
@@ -335,6 +335,42 @@ class TestManualAppendix(unittest.TestCase):
         pipe = make_pipe(extract_fn=lambda q, a: ["из_fn"])
         res = pipe.run_appendix("X", A, manual=True)
         self.assertEqual(res.diseases, ["из_fn"])
+
+    def test_manual_select_gets_no_answer_context(self):
+        seen = {}
+
+        def sel(q, a, d, c):
+            seen["answer"] = a
+            return ["2_1"]
+
+        pipe = make_pipe(select_fn=sel)
+        pipe.extract_manual = lambda payload: ["ХСН"]
+        res = pipe.run_appendix("ХСН", "контекст из прошлого вопроса", manual=True)
+        self.assertEqual(res.status, "ok")
+        self.assertEqual(seen["answer"], "")
+
+    def test_manual_select_uses_direct_system_prompt(self):
+        from medassistant import prompts
+        seen = {}
+
+        def fake_labeler_chat(system, user, max_tokens, schema):
+            seen["system"], seen["user"] = system, user
+            return '{"picks": ["2_1"]}'
+
+        pipe = make_pipe(select_fn=None)
+        pipe._labeler_chat = fake_labeler_chat
+        pipe.extract_manual = lambda payload: ["ХСН"]
+        res = pipe.run_appendix("ХСН", "старый ответ", manual=True)
+        self.assertEqual(res.status, "ok")
+        self.assertIs(seen["system"], prompts.SYSTEM_LABELER_SELECT_DIRECT)
+        self.assertNotIn("Ответ ассистента", seen["user"])
+
+    def test_select_user_prompt_omits_empty_answer(self):
+        from medassistant.pipeline import _select_user
+        without = _select_user("ХСН", "", "ХСН", CARDS)
+        self.assertNotIn("Ответ ассистента", without)
+        with_answer = _select_user(Q, A, "ХСН", CARDS)
+        self.assertIn(f"Ответ ассистента:\n{A}", with_answer)
 
     def test_audit_records_manual_flag(self):
         import json

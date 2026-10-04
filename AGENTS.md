@@ -16,10 +16,9 @@ answer starts); the appendix machinery shows a live stage line («Поиск б�
 в тексте…» → «Ищу соответствующие pdf.» → …) and the composer unblocks
 as soon as the answer text is done; when the labeler filter runs, the candidate
 pdf cards stream to the page immediately after search (search is cheap, the
-labeler call is not), each with a muted retrieval-similarity % badge (hint:
-«не вероятность» — scores never reach stored payloads or the labeler-2
-prompt), and are filtered to the verified picks client-side when
-the appendix payload arrives; when one search candidate clearly dominates
+labeler call is not) and are filtered to the verified picks client-side when
+the appendix payload arrives (cards are name+link only — retrieval scores
+are display-free, consumed by auto-pick alone); when one search candidate clearly dominates
 (`AUTO_PICK_MIN`/`AUTO_PICK_GAP`, default 0.80/0.05), labeler call 2 is skipped
 and that candidate is auto-picked (marked «автоподбор»).
 
@@ -27,8 +26,9 @@ Manual pdf queries (architecture.md §8): a message
 whose first whitespace token is `pdf`/`пдф` (case-insensitive) skips the
 answerer — the stripped payload goes to labeler 1 in direct mode (it normalizes
 the names and decides one vs several diseases), then the standard search →
-auto-pick/select → renderer machinery with the last chat answer as selection
-context. Rendered as ONE chat row — the user bubble retitled «Врач (подбор
+auto-pick/select → renderer machinery; a pdf turn is input-only — the payload
+is the sole context (owner decision 2026-10-04, no last-answer context).
+Rendered as ONE chat row — the user bubble retitled «Врач (подбор
 pdf)» with the stripped payload, sources block below (the stored assistant
 caption row is merged away in the UI); stored with `messages.kind='pdf'`,
 which never enters the answerer history. Bare «pdf» without a disease is a 400.

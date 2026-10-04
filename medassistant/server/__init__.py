@@ -155,9 +155,8 @@ def chat(req: ChatRequest):
     if pdf_payload is not None:
         def gen():
             # manual pdf turn (owner decision 2026-10-04): labeler 1 in direct
-            # mode parses the payload; selection context is the last real
-            # chat answer when the session has one
-            answer_ctx = store.last_message(sid, "assistant") or ""
+            # mode parses the payload; the turn is input-only — no context
+            # from the earlier conversation
             mid_user = store.add_message(sid, "user", question, kind="pdf")
             store.touch(sid, title=question[:60])
             aud.log("pdf_query", session_id=sid, payload=pdf_payload)
@@ -168,7 +167,7 @@ def chat(req: ChatRequest):
                                 "user_message_id": mid_user, "failed": False})
             yield from _run_machinery(
                 sid, message_id,
-                pipe.iter_appendix(pdf_payload, answer_ctx,
+                pipe.iter_appendix(pdf_payload, "",
                                    session_id=sid, manual=True),
                 STAGE_TEXT_PDF)
             store.touch(sid)

@@ -279,11 +279,12 @@ class TestPdfTurn(Base):
         self.assertEqual(raw_answer, "")
         self.assertTrue(kw["manual"])
 
-    def test_context_is_last_chat_answer(self):
+    def test_pdf_turn_is_input_only(self):
         sid, _ = self.chat("Первый вопрос?")
         sid, _ = self.chat("pdf ХСН", session_id=sid)
         appendix_calls = [c for c in self.pipe.calls if c[0] == "appendix"]
-        self.assertEqual(appendix_calls[1][2], "Ответ про ХСН.")
+        self.assertEqual(appendix_calls[1][2], "",
+                         "manual pdf turns must not use earlier answers")
 
     def test_messages_persisted_with_kind_and_caption(self):
         sid, _ = self.chat("pdf ХСН")

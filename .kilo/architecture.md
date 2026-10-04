@@ -207,12 +207,12 @@ with partial or faked results; the answer ships with the honest note.
    (extract → search → auto-pick/select) streams a status line under the
    answer. The composer unblocks as soon as the answer text is complete —
    the next question may be typed while the appendix finishes.
-3. **Provisional candidate cards carry the retrieval score.** On labeler-2
-   turns the streamed cards show the search similarity — embedding cosine,
-   rendered as a muted % with a «not a probability» hint (cosine is a name
-   match strength, not a probability of correctness). Scores ride on the SSE
-   copies only: stored appendix payloads and the labeler-2 prompt stay
-   score-free.
+3. **Provisional candidate cards carry no retrieval score.** On labeler-2
+   turns the streamed cards are name+link only — embedding cosine is a name
+   match strength, not a probability of correctness, and showing it as a %
+   read as misleading (owner decision 2026-10-04). Scores are internal to
+   auto-pick: stored appendix payloads, the labeler-2 prompt, and the SSE
+   candidate cards all stay score-free.
 4. **Auto-pick fast path.** When the top search candidate scores ≥ 0.80 and
    leads the runner-up by ≥ 0.05 (or is the only candidate), labeler call 2
    is skipped and that candidate is taken (marked «автоподбор» in the
@@ -260,9 +260,10 @@ hand from the same composer:
    names none).
 3. **Then the standard machinery unchanged:** search per disease (with
    abbreviation expansion), auto-pick fast path or labeler 2 selection,
-   renderer with the filtered-out list. The selection call's answer
-   context is the last real chat answer in the session ("" when there is
-   none).
+   renderer with the filtered-out list. A pdf turn is input-only (owner
+   decision 2026-10-04, superseding the earlier last-answer context): the
+   selection call sees the payload alone, with a dedicated select prompt
+   that has no «ответ ассистента» section.
 4. **A pdf turn is a new chat turn, rendered as ONE row.** The user bubble
    is retitled «Врач (подбор pdf)» and shows the stripped payload
    («а что про инфаркт»); the sources block (status line while running)

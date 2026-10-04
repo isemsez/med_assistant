@@ -69,9 +69,11 @@ def _extract_user(question, answer):
 
 
 def _select_user(question, answer, disease, cards):
-    lines = [f"Вопрос врача:\n{question}", f"\nОтвет ассистента:\n{answer}",
-             f"\nЗаболевание: «{disease}»",
-             "\nКандидаты (идентификатор — название клинической рекомендации):"]
+    lines = [f"Вопрос врача:\n{question}"]
+    if answer:
+        lines.append(f"\nОтвет ассистента:\n{answer}")
+    lines.append(f"\nЗаболевание: «{disease}»\n"
+                 "\nКандидаты (идентификатор — название клинической рекомендации):")
     for i, c in enumerate(cards, 1):
         lines.append(f"{i}. {c['code_version']} — {c['name']}")
     lines.append("\nВыведи JSON: {\"picks\": [идентификаторы подходящих кандидатов]}.")
@@ -191,7 +193,11 @@ class Pipeline:
 
     def _real_select(self, question, answer, disease, cards):
         t0 = time.monotonic()
-        raw = self._labeler_chat(prompts.SYSTEM_LABELER_SELECT,
+        # no answer -> a manual pdf turn: the direct prompt matches what the
+        # user message actually contains (no «ответ ассистента» section)
+        system = (prompts.SYSTEM_LABELER_SELECT_DIRECT if not answer
+                  else prompts.SYSTEM_LABELER_SELECT)
+        raw = self._labeler_chat(system,
                                  _select_user(question, answer, disease, cards),
                                  config.LABELER_SELECT_MAX_TOKENS,
                                  SELECT_SCHEMA)
@@ -245,8 +251,12 @@ class Pipeline:
         {"stage": "done", "result": AppendixResult}. Stage fns are injectable
         for offline tests; `diseases` stubs labeler 1. `manual=True` runs
         labeler 1 in direct mode over `question` (the «pdf » payload, owner
-        decision 2026-10-04) and rewords the no-disease note.
+        decision 2026-10-04) and rewords the no-disease note. A manual turn
+        is input-only: `raw_answer` is forced empty so no earlier
+        conversation leaks into the selection call.
         """
+        if manual:
+            raw_answer = ""
         if (diseases is None and extract_fn is None and self.extract_fn is None
                 and self.labeler and self.labeler.get("base_url")):
             config.require(self.labeler, "LABELER")
@@ -343,17 +353,9 @@ class Pipeline:
             else:
                 # search is cheap, the labeler call is not: hand the candidate
                 # cards to the UI immediately; it filters them client-side
-                # when the final appendix payload arrives. Retrieval score
-                # rides along for the UI badge (2dp) — on copies only, the
-                # stored filtered_out payload stays score-free; merge by id,
-                # not zip — resolve_picks may drop entries
-                score_by_cv = {c["code_version"]: c.get("score") for c in cards}
-                scored = []
-                for c in cand:
-                    s = score_by_cv.get(c["code_version"])
-                    scored.append({**c, "score": round(s, 2)}
-                                  if s is not None else c)
-                yield {"stage": "select", "disease": disease, "cards": scored}
+                # when the final appendix payload arrives. Retrieval scores
+                # are display-free: only auto-pick consumes them
+                yield {"stage": "select", "disease": disease, "cards": cand}
                 try:
                     picks = select(question, raw_answer, disease, cards)
                 except llm.LLMError as e:

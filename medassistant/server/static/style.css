@@ -74,9 +74,6 @@ details.thinking .think-body {
 /* provisional candidate list: end-result look (not a warning note), dashed
    border marks it as still being filtered; replaced by the final sources */
 .sources.provisional { border-style: dashed; opacity: 0.9; }
-.sources.provisional .cand-score { color: var(--muted); font-size: 11px;
-  margin-left: 6px; font-variant-numeric: tabular-nums; }
-.src-note { color: var(--muted); font-style: italic; }
 .note { max-width: 860px; margin: -6px auto 16px; background: var(--note-bg);
   border: 1px solid #efe0b8; border-radius: 10px; padding: 8px 14px; font-size: 13.5px;
   color: var(--note); }
