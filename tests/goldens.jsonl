@@ -7,6 +7,7 @@
 # full tier:   {"question", "expect_status"?, "expect_name_contains"?} — the
 #              whole pipeline incl. answerer generation (slow on CPU).
 
+{"disease": "острый инфаркт миокарда с подъемом сегмента ST электрокардиограммы", "expect_name_contains": "инфаркт"}
 {"disease": "ХСН", "expect_name_contains": "недостаточн"}
 {"disease": "хроническая обструктивная болезнь легких", "expect_name_contains": "обструктивная болезнь легких"}
 {"disease": "сахарный диабет 2 типа", "expect_name_contains": "диабет 2 типа"}
@@ -16,6 +17,7 @@
 {"disease": "ишемическая болезнь сердца", "expect_name_contains": "ишемическая болезнь сердца"}
 {"disease": "ХБП", "expect_name_contains": "болезнь почек"}
 
+{"question": "Ответь коротко, не размышляй! Что чаще встречается — инфаркт или инсульт?", "expect_name_contains": "инфаркт"}
 {"question": "Какие критерии диагностики хронической сердечной недостаточности?", "expect_name_contains": "недостаточн"}
 {"question": "Как диагностировать и лечить сахарный диабет 2 типа у взрослых?", "expect_name_contains": "диабет 2 типа"}
 {"question": "Какие рекомендации по лечению внебольничной пневмонии у взрослых?", "expect_name_contains": "пневмония"}

@@ -5,14 +5,19 @@
 # TOGGLE: if ANY managed port is up, re-running STOPS every managed
 # component; if all are down, it starts them all. "Safe to re-run" no
 # longer means "no-op" - re-running a live stack stops it.
-#   powershell -File scripts\start_assistant.ps1              # start all / stop all
+#   powershell -File scripts\start_assistant.ps1 [-Canary]    # start all / stop all
 #   powershell -File scripts\start_assistant.ps1 -SkipWeb     # Ollama backends only
 #   powershell -File scripts\start_assistant.ps1 -Foreground  # start with uvicorn in
 #                                                             # this console; Ctrl+C
 #                                                             # stops only the web app
-# Start sequence: both Ollama instances -> web app. The startup canary is
-# NOT run here (minutes on CPU); verify the chain manually when needed:
-#   python -m medassistant canary            (or: canary --no-e2e, fast)
+# Start sequence: both Ollama instances -> (optional) startup canary ->
+# web app -> open http://127.0.0.1:8866 in the default browser.
+# The canary (owner decision 2026-10-04) is opt-in: launched by hand
+# (double-click/shortcut) a 4 s countdown appears - press any key to run it,
+# timeout skips; from a CLI it is skipped unless -Canary is passed. It runs
+# before the web app (~40 s: health checks + one E2E question; it also warms
+# the models, so the first real question is faster). On canary failure the
+# stack still comes up and the script exits 1.
 # Background components run windowless; every start writes per-boot logs
 # (logs/ollama-<inst>-<stamp>.*.log, logs/web-<stamp>.*.log) and prunes old
 # boots, keeping the 5 latest per component.
@@ -22,7 +27,7 @@
 # reported and left alone.
 # Requires (once, see AGENTS.md): setx OLLAMA_IGPU_ENABLE 1,
 # setx OLLAMA_MAX_LOADED_MODELS 2, models pulled, .venv built.
-param([switch]$Foreground, [switch]$SkipWeb)
+param([switch]$Foreground, [switch]$SkipWeb, [switch]$Canary)
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -53,6 +58,63 @@ function Wait-PortOpen([int]$port, [int]$timeoutSec = 60) {
         Start-Sleep -Milliseconds 500
     }
     Write-Error "port $port did not open within ${timeoutSec}s"; exit 1
+}
+
+function Test-HandLaunch {
+    # launched by hand (Explorer double-click / shortcut), not from a shell:
+    # the parent process is Explorer. Anything else (pwsh, cmd, Windows
+    # Terminal, a vanished parent) counts as a CLI launch.
+    try {
+        $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId
+        return ((Get-Process -Id $parent -ErrorAction Stop).ProcessName -eq 'explorer')
+    }
+    catch { return $false }
+}
+
+function Request-CanaryRun([int]$seconds = 4) {
+    # hand-launch only: brief opt-in window - any key runs the canary,
+    # timeout (or a non-interactive console) skips it
+    "canary: press any key to run the full-chain check (default: skip in ${seconds}s)"
+    $deadline = (Get-Date).AddSeconds($seconds)
+    $run = $false
+    try {
+        while ((Get-Date) -lt $deadline) {
+            if ([Console]::KeyAvailable) {
+                $null = [Console]::ReadKey($true)
+                $run = $true
+                break
+            }
+            $left = [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds)
+            Write-Host "`r  skipping the canary in ${left}s...   " -NoNewline
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    catch { }   # input redirected / no real console: fall through to skip
+    if ($run) { Write-Host "`r  canary will run                       " }
+    else { Write-Host "`r  canary skipped                         " }
+    return $run
+}
+
+function Start-BrowserWhenUp([int]$port, [int]$timeoutSec = 30) {
+    # -Foreground helper: this script blocks on uvicorn right after, so a
+    # detached hidden shell polls the port and opens the default browser
+    # only once it binds (never on timeout)
+    $cmd = @"
+`$deadline = (Get-Date).AddSeconds($timeoutSec)
+`$up = `$false
+while ((Get-Date) -lt `$deadline) {
+    `$c = [Net.Sockets.TcpClient]::new()
+    try {
+        if (`$c.ConnectAsync('127.0.0.1', $port).Wait(300) -and `$c.Connected) { `$up = `$true; break }
+    }
+    catch { }
+    finally { `$c.Dispose() }
+    Start-Sleep -Milliseconds 300
+}
+if (`$up) { Start-Process 'http://127.0.0.1:$port' }
+"@
+    Start-Process (Get-Process -Id $PID).Path -WindowStyle Hidden `
+        -ArgumentList '-NoProfile', '-Command', $cmd
 }
 
 function Start-OllamaHidden([string]$inst) {
@@ -141,11 +203,35 @@ else {
 
 if (-not (Test-Path $py)) { Write-Error ".venv not found - see AGENTS.md Setup"; exit 1 }
 
-# 3) web app. Run from $root: the package is not installed, uvicorn imports
-#    medassistant from the repo root via CWD on sys.path.
-if ($SkipWeb) { "skipping web app (-SkipWeb)"; exit 0 }
+# 3) startup canary (opt-in - see header). Runs before the web app: the whole
+#    chain is verified (and the models warmed) first; on failure the stack
+#    still comes up and the script exits 1 at the very end.
+$runCanary = [bool]$Canary
+if (-not $runCanary -and (Test-HandLaunch)) { $runCanary = Request-CanaryRun 4 }
+$canaryFailed = $false
+if ($runCanary) {
+    "running canary (health checks + one E2E question, ~40 s)..."
+    Push-Location $root
+    try { & $py -m medassistant canary }
+    finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) {
+        $canaryFailed = $true
+        Write-Warning ("CANARY FAILED - the stack still comes up; check the " +
+                       "output above, /admin and logs/ollama-*.log")
+    }
+}
+
+# 4) web app. Run from $root: the package is not installed, uvicorn imports
+#    medassistant from the repo root via CWD on sys.path. Once the port
+#    binds, the URL opens in the default browser.
+if ($SkipWeb) {
+    "skipping web app (-SkipWeb)"
+    if ($canaryFailed) { exit 1 }
+    exit 0
+}
 if ($Foreground) {
     "web app in foreground (Ctrl+C stops only the web app)"
+    Start-BrowserWhenUp $webPort
     Push-Location $root
     try { & $py -m uvicorn medassistant.server:app --host 127.0.0.1 --port $webPort }
     finally { Pop-Location }
@@ -158,6 +244,9 @@ else {
         -RedirectStandardError "$root\logs\web-$bootStamp.err.log"
     Remove-OldBootLogs "web"
     Wait-PortOpen $webPort
-    "web app started -> http://127.0.0.1:$webPort (logs: logs\web-$bootStamp.out.log / .err.log)"
+    Start-Process "http://127.0.0.1:$webPort"
+    "web app started -> http://127.0.0.1:$webPort (opened in the default browser;"
+    "logs: logs\web-$bootStamp.out.log / .err.log)"
     "note: the first question is slow while the models load"
 }
+if ($canaryFailed) { exit 1 }

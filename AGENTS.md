@@ -80,15 +80,20 @@ powershell -File scripts\start_assistant.ps1    # toggle: all down -> starts
                                                  # any up -> stops everything
 powershell -File scripts\start_assistant.ps1 -SkipWeb      # Ollama backends only
 powershell -File scripts\start_assistant.ps1 -Foreground   # web app in this
-                                             # console (Ctrl+C stops only it)
+                                              # console (Ctrl+C stops only it)
+powershell -File scripts\start_assistant.ps1 -Canary       # force the startup
+                                              # canary (any launch mode)
 ```
 
-The startup script does NOT run the canary (minutes on CPU; owner decision
-2026-10-03) — the web app comes up fast and the first question is slow while
-models load. Verify the whole chain (3 endpoints, index freshness, corpus,
-one E2E question) manually when needed: `python -m medassistant canary`
-(`--no-e2e` for the fast checks only); it prints the failing check and exits
-1 on failure.
+The startup canary is opt-in (owner decision 2026-10-04): launched by hand
+(Explorer double-click / shortcut) the script shows a 4 s countdown — press
+any key to run it, timeout skips; from a CLI it is skipped unless `-Canary`
+is passed. It runs after the backends, before the web app (~40 s: health
+checks + one E2E question; it also warms the models, so the first real
+question is faster afterwards). On canary failure the stack still comes up
+and the script exits 1. Once the web port binds, the app URL opens in the
+default browser automatically. The manual command stays available:
+`python -m medassistant canary` (`--no-e2e` for the fast checks only).
 
 If both Ollama instances are already up, the web app alone:
 
@@ -121,8 +126,9 @@ python -m medassistant ask --answer-file mock.jsonl   # appendix machinery over
   auto-refresh 30 s. No auth — localhost only.
 - `python -m medassistant canary` — the same checks plus one E2E question
   through the real pipeline (`--no-e2e` for fast checks only); exit 1 on
-  failure. Manual command — not run by `start_assistant.ps1` (too slow to
-  block every boot; owner decision 2026-10-03).
+  failure. Also the opt-in startup check of `start_assistant.ps1`
+  (`-Canary` / 4 s keypress countdown on a hand-click launch; owner
+  decision 2026-10-04).
 - `python -m medassistant regression` — `tests/goldens.jsonl` against live
   endpoints: deterministic search-tier rows (disease → expected top-1
   guideline) and full-tier rows (question → whole pipeline, tolerant name

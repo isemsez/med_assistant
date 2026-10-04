@@ -14,9 +14,9 @@ from . import config, llm
 # pair; normally the case is LOADED from the goldens file so the boot-time
 # canary and the pre-ship regression verify the same rows (single source of
 # truth — stems and questions must not drift between the two).
-FALLBACK_QUESTION = "Какие критерии диагностики хронической сердечной недостаточности?"
-FALLBACK_DISEASE = "хроническая сердечная недостаточность"
-FALLBACK_STEM = "недостаточност"  # covers -ость/-ости morphology
+FALLBACK_QUESTION = "Ответь коротко, не размышляй! Что чаще встречается — инфаркт или инсульт?"
+FALLBACK_DISEASE = "острый инфаркт миокарда с подъемом сегмента ST электрокардиограммы"
+FALLBACK_STEM = "инфаркт"
 
 
 def _case():

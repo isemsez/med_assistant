@@ -15,6 +15,7 @@ Commands:
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from . import audit as audit_mod
