@@ -207,7 +207,13 @@ with partial or faked results; the answer ships with the honest note.
    (extract → search → auto-pick/select) streams a status line under the
    answer. The composer unblocks as soon as the answer text is complete —
    the next question may be typed while the appendix finishes.
-3. **Auto-pick fast path.** When the top search candidate scores ≥ 0.80 and
+3. **Provisional candidate cards carry the retrieval score.** On labeler-2
+   turns the streamed cards show the search similarity — embedding cosine,
+   rendered as a muted % with a «not a probability» hint (cosine is a name
+   match strength, not a probability of correctness). Scores ride on the SSE
+   copies only: stored appendix payloads and the labeler-2 prompt stay
+   score-free.
+4. **Auto-pick fast path.** When the top search candidate scores ≥ 0.80 and
    leads the runner-up by ≥ 0.05 (or is the only candidate), labeler call 2
    is skipped and that candidate is taken (marked «автоподбор» in the
    appendix, `auto: true` in the audit log). Tunable: `AUTO_PICK`,
@@ -224,7 +230,7 @@ with partial or faked results; the answer ships with the honest note.
    candidate that no disease verified lands in a flat top-level
    `filtered_out` list (deduped by id across diseases, each entry keeping
    the disease whose search produced it) — including auto-pick runner-ups
-   (the §6.3 recovery path). Persisted in the sessions DB with the payload.
+   (the §6.4 recovery path). Persisted in the sessions DB with the payload.
 2. **UI: verified list + one collapsible.** The sources block shows the
    verified links (all diseases) by default; ONE «Показать отфильтрованные
    (N)» toggle for the whole block reveals the filtered-out candidates

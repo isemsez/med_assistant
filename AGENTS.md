@@ -16,7 +16,9 @@ answer starts); the appendix machinery shows a live stage line («Поиск б�
 в тексте…» → «Ищу соответствующие pdf.» → …) and the composer unblocks
 as soon as the answer text is done; when the labeler filter runs, the candidate
 pdf cards stream to the page immediately after search (search is cheap, the
-labeler call is not) and are filtered to the verified picks client-side when
+labeler call is not), each with a muted retrieval-similarity % badge (hint:
+«не вероятность» — scores never reach stored payloads or the labeler-2
+prompt), and are filtered to the verified picks client-side when
 the appendix payload arrives; when one search candidate clearly dominates
 (`AUTO_PICK_MIN`/`AUTO_PICK_GAP`, default 0.80/0.05), labeler call 2 is skipped
 and that candidate is auto-picked (marked «автоподбор»).
