@@ -88,7 +88,7 @@ function Request-CanaryRun([int]$seconds = 4) {
     # must go to the HOST stream - a bare string would pollute the return
     # value (function output = array) and make "skip" truthy.
     Write-Host ""
-    Write-Host "canary: press ANY KEY to run. Skip in ${seconds}sec"
+    Write-Host "canary: press ANY KEY to run."
     Write-Host ""
     $deadline = (Get-Date).AddSeconds($seconds)
     $run = $false
@@ -100,7 +100,7 @@ function Request-CanaryRun([int]$seconds = 4) {
                 break
             }
             $left = [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds)
-            Write-Host "`r  skipping the canary in ${left}s...   " -NoNewline
+            Write-Host "`r  skipping in ${left}s...   " -NoNewline
             Start-Sleep -Milliseconds 200
         }
     }
