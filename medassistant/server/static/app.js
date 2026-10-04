@@ -129,7 +129,7 @@ function renderAppendix(payload, anchor) {
     const items = [];
     for (const g of groups) {
       const auto = g.auto_pick ? " · автоподбор" : "";
-      const byDisease = ` — по заболеванию «${esc(g.disease)}»${auto}`;
+      const byDisease = ` — по «${esc(g.disease)}»${auto}`;
       for (const p of g.picks || []) {
         items.push(`<li><a href="${esc(p.url)}" target="_blank" rel="noopener">
           «${esc(p.name)}» (${esc(p.code_version)})</a>${byDisease}</li>`);
@@ -137,7 +137,7 @@ function renderAppendix(payload, anchor) {
     }
     const filteredItem = (c) => `<li class="filtered">
       <a href="${esc(c.url)}" target="_blank" rel="noopener">
-      «${esc(c.name)}» (${esc(c.code_version)})</a> — по заболеванию «${esc(c.disease)}»</li>`;
+      «${esc(c.name)}» (${esc(c.code_version)})</a> — по «${esc(c.disease)}»</li>`;
     if (filtered.length === 1) {
       items.push(filteredItem(filtered[0]));
     } else if (filtered.length > 1) {
