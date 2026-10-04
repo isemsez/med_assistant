@@ -12,6 +12,14 @@ function fmt(text) {
     .replace(/\*([^*\n]+)\*/g, "<i>$1</i>");
 }
 
+function pdfPayload(text) {
+  const t = text.trim();
+  const sp = t.search(/\s/);
+  if (sp === -1) return "";
+  const first = t.slice(0, sp).toLowerCase();
+  return (first === "pdf" || first === "пдф") ? t.slice(sp).trim() : "";
+}
+
 async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -75,13 +83,18 @@ async function newSession() {
 
 // ---------- chat rendering ----------
 
-function msgNode(role, text, mid) {
+function msgNode(role, text, mid, kind) {
   const div = document.createElement("div");
   div.className = `msg ${role}`;
   if (mid != null) div.dataset.mid = mid;
-  div.innerHTML = `<div class="who">${role === "user" ? "Врач" : "Medgemma"}</div>
+  const who = role === "user"
+    ? (kind === "pdf" ? "Врач (подбор pdf)" : "Врач")
+    : (kind === "pdf" ? "Подбор pdf" : "Medgemma");
+  div.innerHTML = `<div class="who">${who}</div>
     <div class="body"></div>`;
-  div.querySelector(".body").innerHTML = fmt(text);
+  div.querySelector(".body").innerHTML = fmt(
+    role === "user" && kind === "pdf"
+      ? `«${pdfPayload(text) || text}»` : text);
   if (role === "user") {
     div.dataset.q = text; // raw question, restored into the composer on rewind
     const btn = document.createElement("button");
@@ -155,8 +168,21 @@ async function loadSession(id) {
     state.current = id;
     $("#messages").innerHTML = "";
     const r = await api(`/api/sessions/${id}/messages`);
-    for (const m of await r.json()) {
-      const node = msgNode(m.role, m.content, m.id);
+    const msgs = await r.json();
+    for (let i = 0; i < msgs.length; i++) {
+      const m = msgs[i];
+      if (m.role === "user" && m.kind === "pdf") {
+        // one row: retitled question bubble, sources block below it; the
+        // stored assistant caption row is merged away
+        const node = msgNode("user", m.content, m.id, "pdf");
+        const next = msgs[i + 1];
+        if (next && next.role === "assistant" && next.kind === "pdf") {
+          if (next.appendix) renderAppendix(next.appendix, node);
+          i++;
+        }
+        continue;
+      }
+      const node = msgNode(m.role, m.content, m.id, m.kind);
       if (m.role === "assistant") {
         if (m.reasoning) {
           // restored from the store: collapsed, the physician can expand
@@ -232,6 +258,7 @@ async function send(question) {
   let thinking = null;
   let statusLine = null;
   let answer = "";
+  let anchor = asst; // pdf turns retarget status/sources/error nodes to the user bubble
   scrollDown();
 
   let sid = state.current;
@@ -261,7 +288,7 @@ async function send(question) {
       if (!statusLine) {
         statusLine = document.createElement("div");
         statusLine.className = "status-line";
-        insertAfter(statusLine, asst);
+        insertAfter(statusLine, anchor);
       }
       statusLine.textContent = text;
       scrollDown();
@@ -292,7 +319,7 @@ async function send(question) {
     const clearCandidates = () => {
       candBlocks.forEach((b) => b.remove());
       candBlocks = [];
-      candAnchor = asst;
+      candAnchor = anchor;
     };
 
     while (true) {
@@ -314,6 +341,15 @@ async function send(question) {
           thinking.body.textContent += data.t;
           thinking.open();
           scrollDown();
+        } else if (ev.event === "kind" && data.turn === "pdf") {
+          // manual pdf turn renders as ONE row: the question bubble is
+          // retitled and re-bodied; the assistant bubble never appears
+          const who = userNode.querySelector(".who");
+          if (who) who.textContent = "Врач (подбор pdf)";
+          userNode.querySelector(".body").innerHTML = fmt(`«${data.payload}»`);
+          asst.remove();
+          anchor = userNode;
+          candAnchor = userNode;
         } else if (ev.event === "token") {
           if (!answerStarted) {
             answerStarted = true;
@@ -333,18 +369,18 @@ async function send(question) {
           cursorOn = false;
           render();
           if (data.user_message_id != null) userNode.dataset.mid = data.user_message_id;
-          if (data.message_id != null) asst.dataset.mid = data.message_id;
+          if (data.message_id != null && asst.isConnected) asst.dataset.mid = data.message_id;
         } else if (ev.event === "appendix") {
           clearStatus();
           clearCandidates(); // provisional list -> final filtered sources
-          renderAppendix(data, asst);
+          renderAppendix(data, anchor);
           scrollDown();
         } else if (ev.event === "error") {
           clearStatus();
           clearCandidates();
           cursorOn = false;
           render();
-          noteNode(data.text, true, asst);
+          noteNode(data.text, true, anchor);
           scrollDown();
         }
       }
@@ -356,7 +392,7 @@ async function send(question) {
   } catch (e) {
     clearCandidates();
     body.innerHTML = fmt(answer);
-    noteNode(`Ошибка запроса: ${e.message}`, true, asst);
+    noteNode(`Ошибка запроса: ${e.message}`, true, anchor);
   } finally {
     state.busy = false;
     state.streamActive = false;

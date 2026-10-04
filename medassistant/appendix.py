@@ -12,6 +12,7 @@ PDF_URL_PREFIX = "/data/pdf/"
 
 NOTE_EXTRACT_ERROR = "Сбой распознавания заболевания — клинические рекомендации не подобраны."
 NOTE_NO_DISEASE = "Заболеваний в ответе не найдено."
+NOTE_NO_DISEASE_MANUAL = "Заболеваний в запросе не найдено."
 NOTE_SEARCH_ERROR = "Сбой подбора рекомендаций."
 NOTE_SELECT_ERROR = "Сбой подбора рекомендаций."
 

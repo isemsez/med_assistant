@@ -114,6 +114,7 @@ async function refreshStats() {
     document.getElementById("stats-days").textContent = s.window_days;
     document.getElementById("usage-cards").innerHTML =
       card(s.turns, "вопросов") +
+      card(s.pdf_turns, "ручных pdf-запросов") +
       card(s.answers, "ответов") +
       card(s.picks.calls, "подборов рекомендаций") +
       card(pct(s.picks.auto, s.picks.calls), "автоподбор");

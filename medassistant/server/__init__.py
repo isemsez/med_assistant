@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from .. import audit as audit_mod
 from .. import store as store_mod
 from .. import appendix, config, health, llm, stats
-from ..pipeline import load_pipeline
+from ..pipeline import load_pipeline, split_pdf_prefix
 from ..store import load_store
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -104,9 +104,39 @@ STAGE_TEXT = {
     "select": "Фильтрую по: «{disease}»",
 }
 
+# manual «pdf » turns: same stages, a wording that fits an explicit request
+STAGE_TEXT_PDF = {**STAGE_TEXT, "extract": "Разбираю запрос pdf…"}
+
 
 def _sse(event, data):
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _run_machinery(sid, message_id, events, stage_text):
+    """Shared appendix-machinery SSE loop: stage events, honest error note on
+    a crash, final appendix payload persisted onto the assistant message."""
+    store, aud = app.state.store, app.state.audit
+    result = None
+    try:
+        for ev in events:
+            if ev.get("stage") == "done":
+                result = ev["result"]
+                continue
+            text = stage_text.get(ev["stage"], ev["stage"]).format(
+                disease=ev.get("disease", ""))
+            yield _sse("stage", {"stage": ev["stage"],
+                                 "disease": ev.get("disease"),
+                                 "code_version": ev.get("code_version"),
+                                 "cards": ev.get("cards"),
+                                 "text": text})
+    except Exception as e:  # machinery bug — surface, never crash the stream
+        aud.log("appendix_crash", session_id=sid, error=repr(e))
+        yield _sse("error", {"text": appendix.NOTE_SEARCH_ERROR})
+        result = None
+    if result is not None:
+        payload = result.to_payload()
+        store.set_appendix(message_id, payload)
+        yield _sse("appendix", payload)
 
 
 @app.post("/api/chat")
@@ -117,7 +147,35 @@ def chat(req: ChatRequest):
     question = req.question.strip()
     if not question:
         raise HTTPException(400, "empty question")
+    pdf_payload = split_pdf_prefix(question)
+    if pdf_payload == "":
+        raise HTTPException(400, "укажите заболевание после «pdf»")
     sid = req.session_id
+
+    if pdf_payload is not None:
+        def gen():
+            # manual pdf turn (owner decision 2026-10-04): labeler 1 in direct
+            # mode parses the payload; selection context is the last real
+            # chat answer when the session has one
+            answer_ctx = store.last_message(sid, "assistant") or ""
+            mid_user = store.add_message(sid, "user", question, kind="pdf")
+            store.touch(sid, title=question[:60])
+            aud.log("pdf_query", session_id=sid, payload=pdf_payload)
+            message_id = store.add_message(
+                sid, "assistant", f"Подбор pdf: «{pdf_payload}»", kind="pdf")
+            yield _sse("kind", {"turn": "pdf", "payload": pdf_payload})
+            yield _sse("done", {"session_id": sid, "message_id": message_id,
+                                "user_message_id": mid_user, "failed": False})
+            yield from _run_machinery(
+                sid, message_id,
+                pipe.iter_appendix(pdf_payload, answer_ctx,
+                                   session_id=sid, manual=True),
+                STAGE_TEXT_PDF)
+            store.touch(sid)
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache",
+                                          "X-Accel-Buffering": "no"})
 
     def gen():
         history = store.history_window(sid, config.HISTORY_WINDOW)
@@ -166,27 +224,10 @@ def chat(req: ChatRequest):
         yield _sse("done", {"session_id": sid, "message_id": message_id,
                             "user_message_id": mid_user, "failed": failed})
 
-        try:
-            result = None
-            for ev in pipe.iter_appendix(question, raw_answer, session_id=sid):
-                if ev.get("stage") == "done":
-                    result = ev["result"]
-                    continue
-                text = STAGE_TEXT.get(ev["stage"], ev["stage"]).format(
-                    disease=ev.get("disease", ""))
-                yield _sse("stage", {"stage": ev["stage"],
-                                     "disease": ev.get("disease"),
-                                     "code_version": ev.get("code_version"),
-                                     "cards": ev.get("cards"),
-                                     "text": text})
-        except Exception as e:  # machinery bug — surface, never crash the stream
-            aud.log("appendix_crash", session_id=sid, error=repr(e))
-            yield _sse("error", {"text": appendix.NOTE_SEARCH_ERROR})
-            result = None
-        if result is not None:
-            payload = result.to_payload()
-            store.set_appendix(message_id, payload)
-            yield _sse("appendix", payload)
+        yield from _run_machinery(
+            sid, message_id,
+            pipe.iter_appendix(question, raw_answer, session_id=sid),
+            STAGE_TEXT)
         store.touch(sid)
 
     return StreamingResponse(gen(), media_type="text/event-stream",

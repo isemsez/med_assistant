@@ -101,9 +101,9 @@ class FakePipe:
             raise self.answer_events
         yield from self.answer_events
 
-    def iter_appendix(self, question, raw_answer, session_id=None):
+    def iter_appendix(self, question, raw_answer, session_id=None, manual=False):
         from medassistant.pipeline import AppendixResult
-        self.calls.append(("appendix", question, raw_answer))
+        self.calls.append(("appendix", question, raw_answer, {"manual": manual}))
         if self.appendix_error is not None:
             raise self.appendix_error
         result = AppendixResult(
@@ -253,6 +253,83 @@ class TestChat(Base):
             len(self.client.get(f"/api/sessions/{sid}/messages").json()), 1)
         self.assertEqual(self.client.delete(
             f"/api/sessions/{sid}/messages/{assistant_id}").status_code, 404)
+
+
+class TestPdfTurn(Base):
+    def test_event_order_kind_done_stage_appendix(self):
+        sid, events = self.chat("pdf ХСН")
+        names = [e for e, _ in events]
+        self.assertEqual(names[0], "kind")
+        self.assertEqual(names[1], "done")
+        self.assertLess(names.index("done"), names.index("stage"),
+                        "composer must unblock before the machinery streams")
+        self.assertEqual(names[-1], "appendix")
+        kind = dict(events)["kind"]
+        self.assertEqual(kind, {"turn": "pdf", "payload": "ХСН"})
+        self.assertEqual(dict(events)["appendix"]["status"], "ok")
+        done = dict(events)["done"]
+        self.assertIsNotNone(done["message_id"])
+        self.assertIsNotNone(done["user_message_id"])
+
+    def test_no_answerer_call_and_manual_flag(self):
+        sid, _ = self.chat("pdf ХСН")
+        self.assertEqual([c[0] for c in self.pipe.calls], ["appendix"])
+        question, raw_answer, kw = self.pipe.calls[0][1:]
+        self.assertEqual(question, "ХСН")
+        self.assertEqual(raw_answer, "")
+        self.assertTrue(kw["manual"])
+
+    def test_context_is_last_chat_answer(self):
+        sid, _ = self.chat("Первый вопрос?")
+        sid, _ = self.chat("pdf ХСН", session_id=sid)
+        appendix_calls = [c for c in self.pipe.calls if c[0] == "appendix"]
+        self.assertEqual(appendix_calls[1][2], "Ответ про ХСН.")
+
+    def test_messages_persisted_with_kind_and_caption(self):
+        sid, _ = self.chat("pdf ХСН")
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
+        self.assertEqual([m["kind"] for m in msgs], ["pdf", "pdf"])
+        self.assertEqual(msgs[0]["content"], "pdf ХСН")
+        self.assertEqual(msgs[1]["content"], "Подбор pdf: «ХСН»")
+        self.assertEqual(msgs[1]["appendix"]["status"], "ok")
+
+    def test_pdf_turn_excluded_from_answerer_history(self):
+        sid, _ = self.chat("Вопрос 1?")
+        self.chat("pdf ХСН", session_id=sid)
+        self.chat("Вопрос 2?", session_id=sid)
+        stream_calls = [c for c in self.pipe.calls if c[0] == "stream"]
+        self.assertEqual(len(stream_calls), 2)
+        self.assertEqual([m["content"] for m in stream_calls[1][2]],
+                         ["Вопрос 1?", "Ответ про ХСН."])
+
+    def test_bare_pdf_400(self):
+        sid = self.client.post("/api/sessions", json={"title": ""}).json()["id"]
+        for q in ("pdf", "пдф   "):
+            r = self.client.post("/api/chat", json={"session_id": sid,
+                                                    "question": q})
+            self.assertEqual(r.status_code, 400)
+
+    def test_cyrillic_prefix_routed(self):
+        sid, events = self.chat("ПДФ ХСН")
+        self.assertIn("kind", [e for e, _ in events])
+        self.assertEqual(dict(events)["kind"]["payload"], "ХСН")
+
+    def test_no_space_prefix_goes_to_answerer(self):
+        sid, events = self.chat("pdfхсн — что это?")
+        self.assertNotIn("kind", [e for e, _ in events])
+        self.assertEqual(self.pipe.calls[0][0], "stream")
+
+    def test_appendix_crash_streams_error_keeps_assistant_row(self):
+        self.pipe.appendix_error = RuntimeError("machinery bug")
+        sid, events = self.chat("pdf ХСН")
+        names = [e for e, _ in events]
+        self.assertIn("error", names)
+        self.assertNotIn("appendix", names)
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
+        self.assertEqual(msgs[1]["kind"], "pdf")
+        self.assertIsNone(msgs[1]["appendix"])
 
 
 class TestStatic(Base):

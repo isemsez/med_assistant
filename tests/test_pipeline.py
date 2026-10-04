@@ -268,6 +268,87 @@ class TestIterAppendix(unittest.TestCase):
         self.assertEqual(events[0]["stage"], "search")
 
 
+class TestSplitPdfPrefix(unittest.TestCase):
+    def test_prefix_variants(self):
+        from medassistant.pipeline import split_pdf_prefix
+        self.assertEqual(split_pdf_prefix("pdf ХСН"), "ХСН")
+        self.assertEqual(split_pdf_prefix("ПДФ хсн"), "хсн")
+        self.assertEqual(split_pdf_prefix("Pdf  ХСН и ХОБЛ"), "ХСН и ХОБЛ")
+        self.assertEqual(split_pdf_prefix("  pdf ХСН "), "ХСН")
+
+    def test_bare_prefix_is_empty_payload(self):
+        from medassistant.pipeline import split_pdf_prefix
+        self.assertEqual(split_pdf_prefix("pdf"), "")
+        self.assertEqual(split_pdf_prefix("пдф   "), "")
+
+    def test_non_pdf_text_is_none(self):
+        from medassistant.pipeline import split_pdf_prefix
+        self.assertIsNone(split_pdf_prefix("pdfхсн"))  # no space after keyword
+        self.assertIsNone(split_pdf_prefix("Вопрос про ХСН?"))
+        self.assertIsNone(split_pdf_prefix("какой pdf формат у файла?"))
+        self.assertIsNone(split_pdf_prefix(""))
+
+
+class TestManualExtract(unittest.TestCase):
+    def _pipe(self, raw):
+        from medassistant import prompts
+        pipe = make_pipe()
+        seen = {}
+
+        def fake_labeler_chat(system, user, max_tokens, schema):
+            seen["system"], seen["user"] = system, user
+            return raw
+
+        pipe._labeler_chat = fake_labeler_chat
+        return pipe, seen
+
+    def test_direct_prompt_parses_and_dedups(self):
+        from medassistant import prompts
+        pipe, seen = self._pipe('{"diseases": [" ХСН ", "ХСН", "ХОБЛ"]}')
+        self.assertEqual(pipe.extract_manual("ХСН и ХОБЛ"), ["ХСН", "ХОБЛ"])
+        self.assertIs(seen["system"], prompts.SYSTEM_LABELER_EXTRACT_DIRECT)
+        self.assertEqual(seen["user"], "ХСН и ХОБЛ")
+
+    def test_invalid_output_raises(self):
+        pipe, _ = self._pipe("не JSON")
+        with self.assertRaises(llm.LLMError):
+            pipe.extract_manual("ХСН")
+
+
+class TestManualAppendix(unittest.TestCase):
+    def test_manual_flow_runs_extract_first(self):
+        pipe = make_pipe()
+        pipe.extract_manual = lambda payload: ["ХСН"]
+        events = list(pipe.iter_appendix("ХСН", A, manual=True))
+        self.assertEqual([e["stage"] for e in events],
+                         ["extract", "search", "select", "done"])
+        self.assertEqual(events[-1]["result"].status, "ok")
+
+    def test_manual_no_disease_note(self):
+        pipe = make_pipe()
+        pipe.extract_manual = lambda payload: []
+        res = pipe.run_appendix("что-то", A, manual=True)
+        self.assertEqual(res.status, "no_disease")
+        self.assertEqual(res.notes, [appendix.NOTE_NO_DISEASE_MANUAL])
+
+    def test_injected_extract_fn_still_wins(self):
+        pipe = make_pipe(extract_fn=lambda q, a: ["из_fn"])
+        res = pipe.run_appendix("X", A, manual=True)
+        self.assertEqual(res.diseases, ["из_fn"])
+
+    def test_audit_records_manual_flag(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            pipe = make_pipe(tmp)
+            pipe.extract_manual = lambda payload: ["ХСН"]
+            pipe.run_appendix("ХСН", A, manual=True)
+            recs = [json.loads(l) for l in
+                    (Path(tmp) / "audit.jsonl").read_text(encoding="utf-8")
+                    .splitlines()]
+            self.assertTrue(all(r.get("manual") for r in recs
+                                if r["stage"] == "diseases"))
+
+
 class TestPromptSilence(unittest.TestCase):
     def test_answerer_prompt_is_silent_about_machinery(self):
         from medassistant import prompts
@@ -276,7 +357,9 @@ class TestPromptSilence(unittest.TestCase):
 
     def test_labeler_prompts_demand_json(self):
         from medassistant import prompts
-        for p in (prompts.SYSTEM_LABELER_EXTRACT, prompts.SYSTEM_LABELER_SELECT):
+        for p in (prompts.SYSTEM_LABELER_EXTRACT,
+                  prompts.SYSTEM_LABELER_EXTRACT_DIRECT,
+                  prompts.SYSTEM_LABELER_SELECT):
             self.assertIn("JSON", p)
 
 

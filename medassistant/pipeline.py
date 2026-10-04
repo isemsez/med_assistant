@@ -29,6 +29,18 @@ class AnswererError(RuntimeError):
     pass
 
 
+PDF_PREFIX_TOKENS = {"pdf", "пдф"}
+
+
+def split_pdf_prefix(text):
+    """'pdf ХСН' / 'пдф ХСН' -> 'ХСН'; '' when the prefix stands alone;
+    None when the text is not a pdf query (owner decision 2026-10-04)."""
+    parts = text.strip().split(None, 1)
+    if parts and parts[0].lower() in PDF_PREFIX_TOKENS:
+        return parts[1] if len(parts) > 1 else ""
+    return None
+
+
 class AppendixResult:
     def __init__(self, status, diseases=None, dropped=None, by_disease=None,
                  notes=None, appendix_text=None, filtered_out=None):
@@ -124,15 +136,9 @@ class Pipeline:
             return llm.chat(self.labeler, messages, max_tokens=max_tokens,
                             json_mode=True)
 
-    def _real_extract(self, question, answer):
-        t0 = time.monotonic()
-        raw = self._labeler_chat(prompts.SYSTEM_LABELER_EXTRACT,
-                                 _extract_user(question, answer),
-                                 config.LABELER_EXTRACT_MAX_TOKENS,
-                                 EXTRACT_SCHEMA)
-        if self.audit:
-            self.audit.log("labeler_extract", raw=raw,
-                           dur_s=round(time.monotonic() - t0, 2))
+    @staticmethod
+    def _parse_diseases(raw):
+        """Labeler extract output -> clean deduped disease list."""
         try:
             data = llm.parse_json_object(raw)
             diseases = data["diseases"]
@@ -140,8 +146,6 @@ class Pipeline:
                     isinstance(d, str) for d in diseases):
                 raise llm.LLMError("diseases is not a list of strings")
         except (llm.LLMError, KeyError, TypeError) as e:
-            if self.audit:
-                self.audit.log("labeler_extract_invalid", raw=raw, error=str(e))
             raise llm.LLMError(str(e))
         seen, out = set(), []
         for d in diseases:
@@ -150,6 +154,33 @@ class Pipeline:
                 seen.add(d)
                 out.append(d)
         return out
+
+    def _extract_call(self, system, user, manual=False):
+        t0 = time.monotonic()
+        raw = self._labeler_chat(system, user,
+                                 config.LABELER_EXTRACT_MAX_TOKENS,
+                                 EXTRACT_SCHEMA)
+        if self.audit:
+            kw = {"manual": True} if manual else {}
+            self.audit.log("labeler_extract", raw=raw,
+                           dur_s=round(time.monotonic() - t0, 2), **kw)
+        try:
+            return self._parse_diseases(raw)
+        except llm.LLMError as e:
+            if self.audit:
+                self.audit.log("labeler_extract_invalid", raw=raw, error=str(e))
+            raise
+
+    def _real_extract(self, question, answer):
+        return self._extract_call(prompts.SYSTEM_LABELER_EXTRACT,
+                                  _extract_user(question, answer))
+
+    def extract_manual(self, payload):
+        """Labeler 1 in direct mode: parse a doctor-typed «pdf » payload
+        into a clean disease list (owner decision 2026-10-04 — labeler 1
+        normalizes the manual input and decides one vs several diseases)."""
+        return self._extract_call(prompts.SYSTEM_LABELER_EXTRACT_DIRECT,
+                                  payload, manual=True)
 
     def _real_search(self, variants):
         config.require(self.embed, "EMBED")
@@ -205,13 +236,16 @@ class Pipeline:
         return None
 
     def iter_appendix(self, question, raw_answer, session_id=None, diseases=None,
-                      extract_fn=None, search_fn=None, select_fn=None):
+                      extract_fn=None, search_fn=None, select_fn=None,
+                      manual=False):
         """Generator over the appendix machinery (architecture.md §3[2]-[5]).
 
         Yields progress events {"stage": extract|search|auto_pick|select,
         "disease": ..., "code_version": ...}; the LAST event is
         {"stage": "done", "result": AppendixResult}. Stage fns are injectable
-        for offline tests; `diseases` stubs labeler 1.
+        for offline tests; `diseases` stubs labeler 1. `manual=True` runs
+        labeler 1 in direct mode over `question` (the «pdf » payload, owner
+        decision 2026-10-04) and rewords the no-disease note.
         """
         if (diseases is None and extract_fn is None and self.extract_fn is None
                 and self.labeler and self.labeler.get("base_url")):
@@ -221,7 +255,15 @@ class Pipeline:
         # [2] labeler 1 — extraction
         if diseases is None:
             yield {"stage": "extract"}
-            extract = extract_fn or self.extract_fn or self._real_extract
+            if extract_fn is not None:
+                extract = extract_fn
+            elif self.extract_fn is not None:
+                extract = self.extract_fn
+            elif manual:
+                def extract(q, a):
+                    return self.extract_manual(q)
+            else:
+                extract = self._real_extract
             try:
                 diseases = extract(question, raw_answer)
             except llm.LLMError as e:
@@ -239,11 +281,15 @@ class Pipeline:
                 cleaned.append(d)
         diseases = cleaned
         if self.audit:
-            self.audit.log("diseases", session_id=session_id, diseases=diseases)
+            kw = {"manual": True} if manual else {}
+            self.audit.log("diseases", session_id=session_id,
+                           diseases=diseases, **kw)
 
         if not diseases:
             yield {"stage": "done", "result": AppendixResult(
-                "no_disease", notes=[appendix.NOTE_NO_DISEASE])}
+                "no_disease",
+                notes=[appendix.NOTE_NO_DISEASE_MANUAL if manual
+                       else appendix.NOTE_NO_DISEASE])}
             return
 
         processed, dropped = diseases[:config.DISEASE_CAP], diseases[config.DISEASE_CAP:]
@@ -345,12 +391,14 @@ class Pipeline:
         yield {"stage": "done", "result": result}
 
     def run_appendix(self, question, raw_answer, session_id=None, diseases=None,
-                     extract_fn=None, search_fn=None, select_fn=None):
+                     extract_fn=None, search_fn=None, select_fn=None,
+                     manual=False):
         """Blocking wrapper over iter_appendix -> AppendixResult."""
         result = None
         for ev in self.iter_appendix(question, raw_answer, session_id=session_id,
                                      diseases=diseases, extract_fn=extract_fn,
-                                     search_fn=search_fn, select_fn=select_fn):
+                                     search_fn=search_fn, select_fn=select_fn,
+                                     manual=manual):
             if ev.get("stage") == "done":
                 result = ev["result"]
         return result

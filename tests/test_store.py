@@ -67,6 +67,55 @@ class TestStore(unittest.TestCase):
         self.assertEqual(store.get_messages(sid)[0]["reasoning"], "r")
         store.close()
 
+    def test_migrates_legacy_db_without_kind_column(self):
+        import sqlite3
+        p = Path(self.tmp.name) / "legacy-kind.db"
+        conn = sqlite3.connect(p)
+        conn.executescript("""
+            CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL);
+            CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL REFERENCES sessions(id),
+                role TEXT NOT NULL, content TEXT NOT NULL, appendix_json TEXT,
+                reasoning TEXT, created_at TEXT NOT NULL);
+        """)
+        conn.execute("INSERT INTO sessions (title, created_at, updated_at) "
+                     "VALUES ('', 't', 't')")
+        conn.execute("INSERT INTO messages (session_id, role, content, "
+                     "created_at) VALUES (1, 'user', 'старый вопрос', 't')")
+        conn.commit()
+        conn.close()
+        store = Store(p)
+        msgs = store.get_messages(1)
+        self.assertEqual(msgs[0]["kind"], "chat", "legacy rows default to chat")
+        store.close()
+
+    def test_kind_roundtrip_and_history_exclusion(self):
+        sid = self.store.create_session()
+        self.store.add_message(sid, "user", "q1")
+        self.store.add_message(sid, "assistant", "a1")
+        self.store.add_message(sid, "user", "pdf ХСН", kind="pdf")
+        self.store.add_message(sid, "assistant", "Подбор pdf: «ХСН»", kind="pdf")
+        self.store.add_message(sid, "user", "q2")
+        h = self.store.history_window(sid, 10)
+        self.assertEqual([m["content"] for m in h], ["q1", "a1", "q2"],
+                         "pdf turns never enter the answerer history")
+        self.assertEqual([m["kind"] for m in self.store.get_messages(sid)],
+                         ["chat", "chat", "pdf", "pdf", "chat"])
+
+    def test_last_message_skips_pdf_rows(self):
+        sid = self.store.create_session()
+        self.assertIsNone(self.store.last_message(sid, "assistant"))
+        self.store.add_message(sid, "user", "pdf ХСН", kind="pdf")
+        self.store.add_message(sid, "assistant", "Подбор pdf", kind="pdf")
+        self.assertIsNone(self.store.last_message(sid, "assistant"),
+                          "caption rows are not selection context")
+        self.store.add_message(sid, "user", "q")
+        self.store.add_message(sid, "assistant", "ответ")
+        self.assertEqual(self.store.last_message(sid, "assistant"), "ответ")
+        self.assertEqual(self.store.last_message(sid, "user"), "q")
+
     def test_history_window_order_and_limit(self):
         sid = self.store.create_session()
         for i in range(5):

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from . import audit as audit_mod
 from . import config, gindex, llm
+from .pipeline import split_pdf_prefix
 
 
 def _print_result(result):
@@ -95,6 +96,35 @@ def cmd_ask(args):
     if not args.question:
         print("either --question or --answer-file is required", file=sys.stderr)
         raise SystemExit(2)
+
+    pdf_payload = split_pdf_prefix(args.question)
+    if pdf_payload == "":
+        print("укажите заболевание после «pdf»", file=sys.stderr)
+        raise SystemExit(2)
+    if pdf_payload is not None:
+        # manual pdf turn (owner decision 2026-10-04): labeler 1 in direct
+        # mode over the payload, no answerer call
+        if store:
+            store.add_message(session_id, "user", args.question, kind="pdf")
+        aud.log("pdf_query", session_id=session_id, payload=pdf_payload)
+        answer_ctx = (store.last_message(session_id, "assistant") or ""
+                      if store else "")
+        result = None
+        for ev in pipe.iter_appendix(pdf_payload, answer_ctx,
+                                      session_id=session_id, manual=True):
+            if ev.get("stage") == "done":
+                result = ev["result"]
+            else:
+                print(f"[подбор pdf] {ev['stage']}"
+                      + (f": {ev['disease']}" if ev.get("disease") else ""),
+                      file=sys.stderr)
+        _print_result(result)
+        if store:
+            store.add_message(session_id, "assistant",
+                              f"Подбор pdf: «{pdf_payload}»",
+                              appendix_payload=result.to_payload(), kind="pdf")
+            store.touch(session_id)
+        return
 
     history = store.history_window(session_id, config.HISTORY_WINDOW) if store else []
     if store:

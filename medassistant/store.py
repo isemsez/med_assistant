@@ -1,9 +1,11 @@
 """Persistent sessions (SQLite, WAL). Conversations survive restarts.
 
 Tables: sessions(id, title, created_at, updated_at),
-messages(id, session_id, role, content, appendix_json, reasoning, created_at).
-`appendix_json` on assistant rows holds the full AppendixResult payload;
-`reasoning` holds the answerer's thinking text (restored collapsed on reload).
+messages(id, session_id, role, content, appendix_json, reasoning, kind,
+created_at). `appendix_json` on assistant rows holds the full AppendixResult
+payload; `reasoning` holds the answerer's thinking text (restored collapsed on
+reload); `kind` separates chat turns from manual «pdf » turns ('pdf' rows
+never enter the answerer history).
 """
 
 import datetime
@@ -29,6 +31,7 @@ CREATE TABLE IF NOT EXISTS messages (
     content TEXT NOT NULL,
     appendix_json TEXT,
     reasoning TEXT,
+    kind TEXT NOT NULL DEFAULT 'chat',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
@@ -55,6 +58,9 @@ class Store:
                 self.conn.execute("PRAGMA table_info(messages)")}
         if "reasoning" not in cols:
             self.conn.execute("ALTER TABLE messages ADD COLUMN reasoning TEXT")
+        if "kind" not in cols:
+            self.conn.execute(
+                "ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'")
 
     def close(self):
         with self._lock:
@@ -111,15 +117,15 @@ class Store:
     # -- messages ---------------------------------------------------------
 
     def add_message(self, session_id, role, content, appendix_payload=None,
-                    reasoning=None):
+                    reasoning=None, kind="chat"):
         now = utc_ts()
         appendix_json = (json.dumps(appendix_payload, ensure_ascii=False)
                          if appendix_payload is not None else None)
         with self._lock:
             cur = self.conn.execute(
                 "INSERT INTO messages (session_id, role, content, appendix_json, "
-                "reasoning, created_at) VALUES (?,?,?,?,?,?)",
-                (session_id, role, content, appendix_json, reasoning, now))
+                "reasoning, kind, created_at) VALUES (?,?,?,?,?,?,?)",
+                (session_id, role, content, appendix_json, reasoning, kind, now))
             self.conn.commit()
             return cur.lastrowid
 
@@ -133,8 +139,8 @@ class Store:
     def get_messages(self, session_id):
         with self._lock:
             rows = self.conn.execute(
-                "SELECT id, role, content, appendix_json, reasoning, created_at "
-                "FROM messages WHERE session_id=? ORDER BY id",
+                "SELECT id, role, content, appendix_json, reasoning, kind, "
+                "created_at FROM messages WHERE session_id=? ORDER BY id",
                 (session_id,)).fetchall()
         out = []
         for r in rows:
@@ -145,13 +151,24 @@ class Store:
         return out
 
     def history_window(self, session_id, window):
-        """Last `window` messages as OpenAI chat messages (for the answerer)."""
+        """Last `window` chat messages as OpenAI chat messages (for the
+        answerer). Manual pdf turns never enter the answerer context."""
         with self._lock:
             rows = self.conn.execute(
                 "SELECT role, content FROM messages WHERE session_id=? "
-                "ORDER BY id DESC LIMIT ?", (session_id, window)).fetchall()
+                "AND kind='chat' ORDER BY id DESC LIMIT ?",
+                (session_id, window)).fetchall()
             return [{"role": r["role"], "content": r["content"]}
                     for r in reversed(rows)]
+
+    def last_message(self, session_id, role, kind="chat"):
+        """Content of the latest message of `role`/`kind`, or None."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT content FROM messages WHERE session_id=? AND role=? "
+                "AND kind=? ORDER BY id DESC LIMIT 1",
+                (session_id, role, kind)).fetchone()
+            return row["content"] if row else None
 
     def truncate_from(self, session_id, message_id):
         """Delete `message_id` and every later message in the session.

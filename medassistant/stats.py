@@ -115,6 +115,7 @@ def collect(path, days=7, now=None):
         "window_days": days,
         "skipped_records": skipped,
         "turns": stages.get("question", 0),
+        "pdf_turns": stages.get("pdf_query", 0),
         "answers": stages.get("raw_answer", 0),
         "appendix_status": dict(status),
         "stage_stop": dict(stops),

@@ -21,6 +21,16 @@ the appendix payload arrives; when one search candidate clearly dominates
 (`AUTO_PICK_MIN`/`AUTO_PICK_GAP`, default 0.80/0.05), labeler call 2 is skipped
 and that candidate is auto-picked (marked «автоподбор»).
 
+Manual pdf queries (owner decisions 2026-10-04, architecture.md §11): a message
+whose first whitespace token is `pdf`/`пдф` (case-insensitive) skips the
+answerer — the stripped payload goes to labeler 1 in direct mode (it normalizes
+the names and decides one vs several diseases), then the standard search →
+auto-pick/select → renderer machinery with the last chat answer as selection
+context. Rendered as ONE chat row — the user bubble retitled «Врач (подбор
+pdf)» with the stripped payload, sources block below (the stored assistant
+caption row is merged away in the UI); stored with `messages.kind='pdf'`,
+which never enters the answerer history. Bare «pdf» without a disease is a 400.
+
 ## Layout
 
 ```
@@ -113,6 +123,8 @@ CLI (same pipeline, no GUI):
 
 ```powershell
 python -m medassistant ask --question "Какие критерии диагностики ХСН?" --save
+python -m medassistant ask --question "pdf ХСН"            # manual pdf query
+                                                             # (no answerer call)
 python -m medassistant ask --answer-file mock.jsonl   # appendix machinery over
                                                       # pre-generated answers
 ```
