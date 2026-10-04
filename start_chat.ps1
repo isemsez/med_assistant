@@ -5,19 +5,24 @@
 # TOGGLE: if ANY managed port is up, re-running STOPS every managed
 # component; if all are down, it starts them all. "Safe to re-run" no
 # longer means "no-op" - re-running a live stack stops it.
-#   powershell -File scripts\start_assistant.ps1 [-Canary]    # start all / stop all
-#   powershell -File scripts\start_assistant.ps1 -SkipWeb     # Ollama backends only
-#   powershell -File scripts\start_assistant.ps1 -Foreground  # start with uvicorn in
-#                                                             # this console; Ctrl+C
-#                                                             # stops only the web app
+#   powershell -File start_chat.ps1                # start all / stop all
+#   powershell -File start_chat.ps1 -SkipCanary    # CLI full start: no offer
+#   powershell -File start_chat.ps1 -SkipWeb       # Ollama backends only
+#   powershell -File start_chat.ps1 -Foreground    # start with uvicorn in
+#                                                  # this console; Ctrl+C
+#                                                  # stops only the web app
+#   powershell -File start_chat.ps1 -Canary        # force the startup canary
+#
+# Launch modes (owner decision 2026-10-04): BARE (no arguments) = hand-click
+# (Explorer / Total Commander double-click): a 5 s canary offer appears
+# after the backends start (any key runs it, timeout skips) and the console
+# lingers before closing on its own (10 s after a start, 2 s after a
+# stop). ANY argument = deliberate CLI run: no offer, no linger.
 # Start sequence: both Ollama instances -> (optional) startup canary ->
-# web app -> open http://127.0.0.1:8866 in the default browser.
-# The canary (owner decision 2026-10-04) is opt-in: launched by hand
-# (double-click/shortcut) a 4 s countdown appears - press any key to run it,
-# timeout skips; from a CLI it is skipped unless -Canary is passed. It runs
-# before the web app (~40 s: health checks + one E2E question; it also warms
-# the models, so the first real question is faster). On canary failure the
-# stack still comes up and the script exits 1.
+# web app -> open http://127.0.0.1:8866 in the default browser. The canary
+# (~40 s: health checks + one E2E question; it also warms the models, so
+# the first real question is faster) runs before the web app; on failure
+# the stack still comes up and the script exits 1.
 # Background components run windowless; every start writes per-boot logs
 # (logs/ollama-<inst>-<stamp>.*.log, logs/web-<stamp>.*.log) and prunes old
 # boots, keeping the 5 latest per component.
@@ -27,14 +32,31 @@
 # reported and left alone.
 # Requires (once, see AGENTS.md): setx OLLAMA_IGPU_ENABLE 1,
 # setx OLLAMA_MAX_LOADED_MODELS 2, models pulled, .venv built.
-param([switch]$Foreground, [switch]$SkipWeb, [switch]$Canary)
+param([switch]$Foreground, [switch]$SkipWeb, [switch]$Canary, [switch]$SkipCanary)
 $ErrorActionPreference = "Stop"
 
-$root = Split-Path -Parent $PSScriptRoot
+# bare invocation = hand-clicked (canary offer + exit linger); any argument
+# = deliberate CLI run (no offer, no linger)
+$NoArgs = ($PSBoundParameters.Count -eq 0)
+
+$root = $PSScriptRoot
 $webPort = 8866
 $ollamaExe = "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe"
 $py = "$root\.venv\Scripts\python.exe"
-if (-not (Test-Path $ollamaExe)) { Write-Error "ollama.exe not found: $ollamaExe"; exit 1 }
+
+function Quit([int]$code = 0, [double]$pauseSec = 10) {
+    # linger on hand-clicked (bare) runs so the messages can be read
+    # (10 s after a start, 2 s after a stop), then close on its own;
+    # CLI runs exit immediately
+    if ($NoArgs -and $pauseSec -gt 0) {
+        ""
+        "closing in $($pauseSec)s..."
+        Start-Sleep -Milliseconds ([int]($pauseSec * 1000))
+    }
+    exit $code
+}
+
+if (-not (Test-Path $ollamaExe)) { Write-Warning "ollama.exe not found: $ollamaExe"; Quit 1 }
 if (-not (Test-Path "$root\.env")) { Write-Warning ".env missing - copy .env.example .env" }
 if (-not (Test-Path "$root\logs")) { New-Item -ItemType Directory "$root\logs" | Out-Null }
 $bootStamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -57,24 +79,17 @@ function Wait-PortOpen([int]$port, [int]$timeoutSec = 60) {
         if (Test-PortOpen $port) { return }
         Start-Sleep -Milliseconds 500
     }
-    Write-Error "port $port did not open within ${timeoutSec}s"; exit 1
-}
-
-function Test-HandLaunch {
-    # launched by hand (Explorer double-click / shortcut), not from a shell:
-    # the parent process is Explorer. Anything else (pwsh, cmd, Windows
-    # Terminal, a vanished parent) counts as a CLI launch.
-    try {
-        $parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId
-        return ((Get-Process -Id $parent -ErrorAction Stop).ProcessName -eq 'explorer')
-    }
-    catch { return $false }
+    Write-Warning "port $port did not open within ${timeoutSec}s"; Quit 1
 }
 
 function Request-CanaryRun([int]$seconds = 4) {
-    # hand-launch only: brief opt-in window - any key runs the canary,
-    # timeout (or a non-interactive console) skips it
-    "canary: press any key to run the full-chain check (default: skip in ${seconds}s)"
+    # bare-run only: brief opt-in window - any key runs the canary,
+    # timeout (or a non-interactive console) skips it. NB: every message
+    # must go to the HOST stream - a bare string would pollute the return
+    # value (function output = array) and make "skip" truthy.
+    Write-Host ""
+    Write-Host "canary: press ANY KEY to run. Skip in ${seconds}sec"
+    Write-Host ""
     $deadline = (Get-Date).AddSeconds($seconds)
     $run = $false
     try {
@@ -91,7 +106,10 @@ function Request-CanaryRun([int]$seconds = 4) {
     }
     catch { }   # input redirected / no real console: fall through to skip
     if ($run) { Write-Host "`r  canary will run                       " }
-    else { Write-Host "`r  canary skipped                         " }
+    else {
+        Write-Host "`r  canary skipped                         `r"
+        Write-Host ""
+    }
     return $run
 }
 
@@ -174,11 +192,12 @@ if ($up.Count -gt 0) {
     }
     "Stopping assistant (re-run to start again):"
     foreach ($c in $components) { Stop-ByPort $c.Port $c.Proc $c.Label }
-    exit 0
+    Quit 0 2
 }
 
 # --- start everything -------------------------------------------------------
 "Starting assistant:"
+Write-Host ""
 
 # 1) main instance (answerer medgemma-cpu + bge-m3), default host :11434.
 #    MUST run before the labeler env vars are set - otherwise it would
@@ -201,13 +220,15 @@ else {
     Wait-PortOpen 11435; "labeler Ollama :11435 started"
 }
 
-if (-not (Test-Path $py)) { Write-Error ".venv not found - see AGENTS.md Setup"; exit 1 }
+if (-not (Test-Path $py)) { Write-Warning ".venv not found - see AGENTS.md Setup"; Quit 1 }
 
-# 3) startup canary (opt-in - see header). Runs before the web app: the whole
-#    chain is verified (and the models warmed) first; on failure the stack
-#    still comes up and the script exits 1 at the very end.
+# 3) startup canary (owner decision 2026-10-04). The 5 s offer appears only
+#    on BARE runs (hand-click); any argument means CLI and skips it,
+#    -Canary forces the run. Runs before the web app: the whole chain is
+#    verified (and the models warmed) first; on failure the stack still
+#    comes up and the script exits 1 at the very end.
 $runCanary = [bool]$Canary
-if (-not $runCanary -and (Test-HandLaunch)) { $runCanary = Request-CanaryRun 4 }
+if (-not $runCanary -and -not $SkipCanary -and $NoArgs) { $runCanary = Request-CanaryRun 5 }
 $canaryFailed = $false
 if ($runCanary) {
     "running canary (health checks + one E2E question, ~40 s)..."
@@ -226,8 +247,8 @@ if ($runCanary) {
 #    binds, the URL opens in the default browser.
 if ($SkipWeb) {
     "skipping web app (-SkipWeb)"
-    if ($canaryFailed) { exit 1 }
-    exit 0
+    if ($canaryFailed) { Quit 1 }
+    Quit 0
 }
 if ($Foreground) {
     "web app in foreground (Ctrl+C stops only the web app)"
@@ -247,6 +268,6 @@ else {
     Start-Process "http://127.0.0.1:$webPort"
     "web app started -> http://127.0.0.1:$webPort (opened in the default browser;"
     "logs: logs\web-$bootStamp.out.log / .err.log)"
-    "note: the first question is slow while the models load"
 }
-if ($canaryFailed) { exit 1 }
+if ($canaryFailed) { Quit 1 }
+Quit 0

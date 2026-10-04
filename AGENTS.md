@@ -57,7 +57,7 @@ Models (from the gp-eval runbook; per README §5 of gp-eval):
   otherwise reasoning eats the token budget and content comes back empty)
 - env once: `setx OLLAMA_IGPU_ENABLE 1`, `setx OLLAMA_MAX_LOADED_MODELS 2`,
   then restart Ollama; after each reboot start everything with
-  `powershell -File scripts\start_assistant.ps1` (toggle: when everything is
+  `powershell -File start_chat.ps1` (repo root; toggle: when everything is
   down it starts both Ollama instances and the web app; re-run while up
   STOPS it all; `-SkipWeb` = backends only, `-Foreground` = web app in the
   console)
@@ -74,21 +74,24 @@ Rebuild after dropping in a refreshed `data/docs_meta.json`.
 ## Run
 
 ```powershell
-powershell -File scripts\start_assistant.ps1    # toggle: all down -> starts
-                                                 # Ollama + web app
-                                                 # -> http://127.0.0.1:8866;
-                                                 # any up -> stops everything
-powershell -File scripts\start_assistant.ps1 -SkipWeb      # Ollama backends only
-powershell -File scripts\start_assistant.ps1 -Foreground   # web app in this
-                                              # console (Ctrl+C stops only it)
-powershell -File scripts\start_assistant.ps1 -Canary       # force the startup
-                                              # canary (any launch mode)
+powershell -File start_chat.ps1                # toggle: all down -> starts
+                                                # Ollama + web app
+                                                # -> http://127.0.0.1:8866;
+                                                # any up -> stops everything
+powershell -File start_chat.ps1 -SkipCanary    # CLI full start: no offer
+powershell -File start_chat.ps1 -SkipWeb       # Ollama backends only
+powershell -File start_chat.ps1 -Foreground    # web app in this console
+                                                # (Ctrl+C stops only it)
+powershell -File start_chat.ps1 -Canary        # force the startup canary
 ```
 
-The startup canary is opt-in (owner decision 2026-10-04): launched by hand
-(Explorer double-click / shortcut) the script shows a 4 s countdown — press
-any key to run it, timeout skips; from a CLI it is skipped unless `-Canary`
-is passed. It runs after the backends, before the web app (~40 s: health
+Launch modes (owner decision 2026-10-04): BARE invocation (no arguments) =
+hand-clicked (Explorer / Total Commander double-click) — after the backends
+start, a 5 s countdown offers the canary (press any key to run it, timeout
+skips) and the console closes on its own after a short linger (10 s after a
+start, 2 s after a stop). ANY argument = deliberate CLI run: no offer, no
+linger (`-SkipCanary` is the
+plain CLI full-start). The canary runs before the web app (~40 s: health
 checks + one E2E question; it also warms the models, so the first real
 question is faster afterwards). On canary failure the stack still comes up
 and the script exits 1. Once the web port binds, the app URL opens in the
@@ -126,9 +129,9 @@ python -m medassistant ask --answer-file mock.jsonl   # appendix machinery over
   auto-refresh 30 s. No auth — localhost only.
 - `python -m medassistant canary` — the same checks plus one E2E question
   through the real pipeline (`--no-e2e` for fast checks only); exit 1 on
-  failure. Also the opt-in startup check of `start_assistant.ps1`
-  (`-Canary` / 4 s keypress countdown on a hand-click launch; owner
-  decision 2026-10-04).
+  failure. Also the opt-in startup check of `start_chat.ps1` (`-Canary` /
+  5 s keypress countdown on a bare hand-click launch; owner decision
+  2026-10-04).
 - `python -m medassistant regression` — `tests/goldens.jsonl` against live
   endpoints: deterministic search-tier rows (disease → expected top-1
   guideline) and full-tier rows (question → whole pipeline, tolerant name
