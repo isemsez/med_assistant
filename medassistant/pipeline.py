@@ -297,8 +297,17 @@ class Pipeline:
             else:
                 # search is cheap, the labeler call is not: hand the candidate
                 # cards to the UI immediately; it filters them client-side
-                # when the final appendix payload arrives
-                yield {"stage": "select", "disease": disease, "cards": cand}
+                # when the final appendix payload arrives. Retrieval score
+                # rides along for the UI badge (2dp) — on copies only, the
+                # stored filtered_out payload stays score-free; merge by id,
+                # not zip — resolve_picks may drop entries
+                score_by_cv = {c["code_version"]: c.get("score") for c in cards}
+                scored = []
+                for c in cand:
+                    s = score_by_cv.get(c["code_version"])
+                    scored.append({**c, "score": round(s, 2)}
+                                  if s is not None else c)
+                yield {"stage": "select", "disease": disease, "cards": scored}
                 try:
                     picks = select(question, raw_answer, disease, cards)
                 except llm.LLMError as e:

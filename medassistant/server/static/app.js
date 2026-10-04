@@ -281,7 +281,7 @@ async function send(question) {
         c.url
           ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">«${esc(c.name)}» (${esc(c.code_version)})</a>`
           : `«${esc(c.name)}» (${esc(c.code_version)})`
-      }</li>`).join("");
+      }${c.score != null ? `<span class="cand-score">${Number(c.score).toFixed(2)}</span>` : ""}</li>`).join("");
       wrap.innerHTML = `<div class="caption">Кандидаты pdf — фильтрую по заболеванию «${esc(disease)}»</div>
         <ul>${items}</ul>`;
       insertAfter(wrap, candAnchor);

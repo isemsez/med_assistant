@@ -249,9 +249,9 @@ class TestIterAppendix(unittest.TestCase):
         self.assertEqual(events[2]["stage"], "select")
         self.assertEqual(events[2]["cards"], [
             {"code_version": "2_1", "name": "ХСН", "url": pdf_url("2_1"),
-             "path": str(PDF_DIR / DOCS["2_1"]["file"])},
+             "path": str(PDF_DIR / DOCS["2_1"]["file"]), "score": 0.9},
             {"code_version": "1_1", "name": "Грипп", "url": pdf_url("1_1"),
-             "path": str(PDF_DIR / DOCS["1_1"]["file"])},
+             "path": str(PDF_DIR / DOCS["1_1"]["file"]), "score": 0.88},
         ])
 
     def test_stage_sequence_extract_error(self):
