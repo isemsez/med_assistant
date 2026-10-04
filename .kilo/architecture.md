@@ -1,9 +1,9 @@
-# Workflow architecture — corrected draft (2026-09-27)
+# Workflow architecture
 
-Status: **draft for owner review**. Where this document conflicts with README §3,
-this document wins. Evaluation/exam logic (question generation, judge metrics,
-decision rules) is intentionally **not part of this architecture**; goldens and
-data assets are retained but out of scope here.
+This is the authoritative design of med_assistant; `AGENTS.md` is the runbook.
+Evaluation/exam logic (question generation, judge metrics, decision rules) is
+intentionally **not part of this architecture**; goldens and data assets are
+retained but out of scope here.
 
 ---
 
@@ -14,8 +14,8 @@ A medical reference assistant for **Russian physicians in polyclinics**.
 **Audience: all physicians — all specialties, pediatrics included.**
 The general physician (терапевт / ВОП) is the *primary* user, because a GP
 cannot hold deep knowledge of every narrow field and therefore benefits most
-from a broad generalist assistant. Narrow specialists are also served, with the
-caveat that a small generalist model serves their fields shallower.
+from a broad generalist assistant. Narrow specialists are also served, with
+the caveat that a small generalist model serves their fields shallower.
 
 **Two tiers, one pipeline:**
 
@@ -75,7 +75,7 @@ raw answer  ──────────────────────�
 [4] LABELER call 2: given the answer context       │
     + candidates -> pick ids or "none"             │
    │                                               │
-   ▼                                               │
+   ▼                                               ▼
 [5] RENDERER (pure Python)
      ids -> docs_meta.json -> local PDF file
      (data/clinrec_minzdrav/, served at /data/pdf)
@@ -91,11 +91,9 @@ final answer = raw answer + appendix block (local PDF links only)
   specific normative documents/orders/guidelines — if asked about them
   directly, say you have no access to them (never invent them).
 - No footnote rule, no self-labelling, no few-shot examples that could leak.
-  (The old footnote mode where the answerer tagged itself is dropped: it makes
-  the answerer aware of the appendix machinery and contaminates the answer.
   The prompt stays **silent** about footnotes — no negative instruction
   either: the model has no such instinct to suppress, and naming the behavior
-  in a negation would only plant it.)
+  in a negation would only plant it.
 - Today: main Ollama instance, CPU, thinking on, 2048-token budget.
 
 ### [2] Labeler — extraction call
@@ -115,7 +113,7 @@ final answer = raw answer + appendix block (local PDF links only)
 
 - Pure Python, deterministic, no LLM inside.
 - **Index (built offline):** for every active guideline in the register
-  metadata (`analysis/docs_meta.json`), embed its `name` **and** every
+  metadata (`data/docs_meta.json`), embed its `name` **and** every
   `mkb_names` variant (semicolon-separated) as separate vectors → one small
   vector index (~1–2k vectors), bge-m3 via the local embed endpoint.
   **All 757 guidelines are indexed — no age/GP filter** (the assistant serves
@@ -136,16 +134,16 @@ final answer = raw answer + appendix block (local PDF links only)
 - Input: the answer context + the candidate cards. The model judges relevance
   ("is this candidate what the answer actually discussed?") and picks
   `code_version` ids, or `none` if no candidate fits.
-- This is the step that repairs the classic fuzzy-matcher failure: a
-  plausible-but-wrong link. The threshold can't read the answer; this call can.
+- This is the step that adds the relevance judgment a similarity threshold
+  cannot make: the threshold can't read the answer; this call can.
 - Bounded: exactly one selection call, no agentic loop. Per-call no-retry.
 
 ### [5] Renderer
 
 - Pure Python: picked ids → `docs_meta.json` → the local guideline PDF
-  (`data/clinrec_minzdrav/`, one file per register entry, moved from the
-  downloaded corpus 2026-10-02). The chat server serves the folder at
-  `/data/pdf`; the appendix links there and opens the PDF in a browser tab.
+  (`data/clinrec_minzdrav/`, one file per register entry). The chat server
+  serves the folder at `/data/pdf`; the appendix links there and opens the
+  PDF in a browser tab.
 - Guideline display names come from the PDF file name (textual part after the
   version-code prefix) — the on-disk document title, which differs from the
   register metadata name for ~114/757 entries. The CLI/audit appendix text
@@ -187,80 +185,19 @@ or pipeline steps.
 
 ## 5. Failure handling
 
-| Failure | Behavior |
-|---|---|
-| Answerer call fails / empty | no answer; recorded |
-**Any stage that is empty or erroneous stops the pipeline** — no
-continuation with partial or faked results; the answer ships with the
-honest note.
+**Any stage that is empty or erroneous stops the pipeline** — no continuation
+with partial or faked results; the answer ships with the honest note.
 
 | Stage | Outcome | Physician-visible result |
 |---|---|---|
+| Answerer | call fails / empty | no answer; recorded |
 | Labeler 1 | error (invalid / no output) | error note «сбой распознавания заболевания»; stop |
 | Labeler 1 | valid: no disease in the answer | note «Заболеваний в ответе не найдено»; stop |
 | Tool | error (embed endpoint down) | error note «сбой подбора рекомендаций»; stop |
 | Tool + Labeler 2 | valid: no match for the disease | per-disease note «Действующая клиническая рекомендация по заболеванию «X» не найдена» |
 | Labeler 2 | error (invalid output) | error note «сбой подбора рекомендаций»; stop |
 
-## 6. Corrections applied in this draft (vs. current implementation)
-
-1. **Answerer is guideline-blind.** Footnote mode / self-labelling dropped;
-   the answerer prompt no longer contains any appendix-related rule.
-2. **Detection moved fully to the second model** (labeler), as a bounded
-   two-call protocol with a retrieval tool in between — replacing
-   "labeler names disease → Python decides alone". The selection call adds
-   the relevance judgment that pure matching lacks.
-3. **Embedding index over `name` + `mkb_names`** replaces the two-stage
-   ICD-10 path (mkb2descr fuzzy matching → code proximity ladder). One hop,
-   morphology/synonym tolerant, no ICD-10 intermediate.
-4. **Model picks ids, Python renders URLs.** The model can never emit a link;
-   fabrication of URLs is structurally impossible.
-5. **No-unsolicited-treatment rule** added to the answerer prompt (decided
-   2026-09-26, previously not in prompts).
-6. **ГРЛС drug validator removed** from the flow: appending registered trade
-   names is unsolicited treatment content.
-7. **Scope: all physicians.** Index covers all 757 guidelines; the adult-GP
-   558 filter was a corpus limitation, not a product boundary.
-8. **Eval/exam logic removed** from the runtime project (goldens and data
-   kept).
-9. **Labeler fine-tuning deferred:** first ship prompt-only with
-   schema-constrained decoding, measure, then QLoRA only if numbers demand it.
-10. **27B migration path:** the "tool" is a JSON roundtrip at 4B and a native
-    function call at 27B; index and rendering unchanged.
-11. **No statement excerpts in the appendix** — guideline links only. A
-    matched physician reads the whole PDF; excerpt-grade extraction also
-    failed its quality gate.
-12. **Chat GUI delivery (new feature)** — the assistant ships as a real chat
-    application for physicians; the two models run in the background as
-    services.
-
-## 7. Removed / dormant components
-
-| Component | Disposition |
-|---|---|
-| Footnote rule (`FOOTNOTE_RULE`, `SYSTEM_GENERAL` variant) | removed from answerer prompt |
-| ГРЛС validator (`gpeval/drugs.py`, `phase7_grls.py`) | removed from the flow |
-| Appendix statement excerpts (`--with-statements`) | removed — links only; extracted statements stay as data |
-| ICD-10 two-stage matcher (`mkb2descr` path, `mkb.proximity`) | superseded by the embedding index |
-| BM25 statement index, `gpeval/chunks.py` | dormant (served RAG/eval; rebuild only if fine-tuning returns) |
-| Question generation, judge metrics, decision memo, regression bench | out of scope here; goldens kept |
-| `abbr2term` | standard part of the tool: abbreviation expansions added as query variants |
-
-## 8. Decisions (owner, 2026-09-27)
-
-1. **Outcome notes per stage; errors never masquerade as results.** Labeler 1:
-   valid «no disease» → «Заболеваний в ответе не найдено»; error → its own
-   error note. Tool + Labeler 2: valid «no match» → per-disease
-   «Действующая клиническая рекомендация по заболеванию «X» не найдена»;
-   error → its own error note. Any empty or errored stage stops the
-   pipeline; the answer ships with the honest note.
-2. **Dual-instance layout kept.** Answerer on the main Ollama instance (CPU),
-   labeler on the second instance (iGPU) — as today.
-3. **Treatment lookup tool deferred.** First get the existing intentions
-   working (same gate as labeler fine-tuning); the websearch tool is a later
-   add-on, not part of the current build.
-
-## 9. Decisions (owner, 2026-09-29) — UX and fast path
+## 6. UX and the auto-pick fast path
 
 1. **Thinking is visible.** The answerer's reasoning streams into a
    collapsible «Размышления модели» block above the answer; it is open while
@@ -276,10 +213,10 @@ honest note.
    appendix, `auto: true` in the audit log). Tunable: `AUTO_PICK`,
    `AUTO_PICK_MIN`, `AUTO_PICK_GAP` in `.env`. Known tradeoff: near-duplicate
    guideline versions (adult vs pediatric) may be auto-picked without the
-   relevance check; the physician remains the final check — and since
-   §10.1 the runner-ups are one click away in the appendix.
+   relevance check; the physician remains the final check — and since §7.1
+   the runner-ups are one click away in the appendix.
 
-## 10. Decisions (owner, 2026-10-02) — selection is not destructive
+## 7. Filtered-out candidates — selection is not destructive
 
 1. **Flat filtered-out list in the payload.** Labeler 2's selection is
    fallible (a wrong "none" verdict used to make all candidates vanish).
@@ -287,7 +224,7 @@ honest note.
    candidate that no disease verified lands in a flat top-level
    `filtered_out` list (deduped by id across diseases, each entry keeping
    the disease whose search produced it) — including auto-pick runner-ups
-   (the §9.3 recovery path). Persisted in the sessions DB with the payload.
+   (the §6.3 recovery path). Persisted in the sessions DB with the payload.
 2. **UI: verified list + one collapsible.** The sources block shows the
    verified links (all diseases) by default; ONE «Показать отфильтрованные
    (N)» toggle for the whole block reveals the filtered-out candidates
@@ -298,3 +235,36 @@ honest note.
    candidates exist but none were verified — the filtered-out list is the
    honest presentation. Legacy stored notes are filtered out in the UI.
    True error notes (extract/search/select failures) are unchanged.
+
+## 8. Manual pdf queries
+
+Labeler 1 sometimes extracts an incomplete disease list, so a discussed
+guideline never appears. The physician can run the appendix machinery by
+hand from the same composer:
+
+1. **Prefix routing.** A message whose first whitespace-separated token is
+   `pdf` or `пдф` (case-insensitive) is a *pdf turn*: the answerer is not
+   called. The prefix must be a separate token («pdfхсн» is a normal
+   question); a bare «pdf» is rejected with a validation error.
+2. **Labeler 1 in direct mode parses the payload:** the doctor's free text
+   goes through a dedicated extract prompt that normalizes names to the
+   nominative case and decides whether one or several diseases are named —
+   the same schema-constrained call, fallible like any labeler call, with
+   honest notes on failure («Заболеваний в запросе не найдено» when it
+   names none).
+3. **Then the standard machinery unchanged:** search per disease (with
+   abbreviation expansion), auto-pick fast path or labeler 2 selection,
+   renderer with the filtered-out list. The selection call's answer
+   context is the last real chat answer in the session ("" when there is
+   none).
+4. **A pdf turn is a new chat turn, rendered as ONE row.** The user bubble
+   is retitled «Врач (подбор pdf)» and shows the stripped payload
+   («а что про инфаркт»); the sources block (status line while running)
+   attaches directly below it. Under the hood it is still stored as a
+   user row + an assistant caption row (`kind='pdf'`); the UI merges the
+   pair. Previous answers are never mutated.
+5. **Pdf turns never enter the answerer history** (`messages.kind='pdf'`,
+   excluded from the history window) — the command syntax must not leak
+   into medical answers.
+6. **CLI parity:** `python -m medassistant ask --question "pdf ХСН"` runs
+   the same manual path.

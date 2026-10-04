@@ -2,7 +2,7 @@
 
 Medical reference assistant for Russian physicians — answer-first pipeline with a
 post-hoc guideline verification appendix. The authoritative design is
-[`architecture.md`](architecture.md); this README is the runbook.
+[`.kilo/architecture.md`](.kilo/architecture.md); this README is the runbook.
 
 Pipeline: ANSWERER (plain medical model, guideline-blind) → LABELER call 1
 (diseases as JSON) → TOOL `search_guidelines` (embedding index, top-5 cards, no
@@ -10,7 +10,7 @@ URLs) → LABELER call 2 (pick ids or none) → RENDERER (register PDF links und
 the untouched answer). Failures surface as honest notes; nothing is retried at
 the semantic level. Delivered as a chat web app.
 
-UX (owner decisions 2026-09-29, architecture.md §9): the answerer's reasoning
+UX (architecture.md §6): the answerer's reasoning
 streams into a collapsible «Размышления модели» block (auto-collapses when the
 answer starts); the appendix machinery shows a live stage line («Поиск болезней
 в тексте…» → «Ищу соответствующие pdf.» → …) and the composer unblocks
@@ -21,7 +21,7 @@ the appendix payload arrives; when one search candidate clearly dominates
 (`AUTO_PICK_MIN`/`AUTO_PICK_GAP`, default 0.80/0.05), labeler call 2 is skipped
 and that candidate is auto-picked (marked «автоподбор»).
 
-Manual pdf queries (owner decisions 2026-10-04, architecture.md §11): a message
+Manual pdf queries (architecture.md §8): a message
 whose first whitespace token is `pdf`/`пдф` (case-insensitive) skips the
 answerer — the stripped payload goes to labeler 1 in direct mode (it normalizes
 the names and decides one vs several diseases), then the standard search →
@@ -125,11 +125,11 @@ CLI (same pipeline, no GUI):
 python -m medassistant ask --question "Какие критерии диагностики ХСН?" --save
 python -m medassistant ask --question "pdf ХСН"            # manual pdf query
                                                              # (no answerer call)
-python -m medassistant ask --answer-file mock.jsonl   # appendix machinery over
+python -m medassistant ask --answer-file answers.jsonl # appendix machinery over
                                                       # pre-generated answers
 ```
 
-`mock.jsonl` rows: `{"question", "raw_answer"}` (live labeler + search) or with
+Answer-file rows: `{"question", "raw_answer"}` (live labeler + search) or with
 `"diseases"` (skips labeler 1) or `"picks"` (renderer-only, fully offline).
 
 ## Observability (owner decision 2026-10-02: laptop-only, built-in)
