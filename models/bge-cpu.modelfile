@@ -1,0 +1,7 @@
+# bge-cpu: bge-m3 embeddings pinned to CPU (num_gpu 0) so the embed model
+# never competes with the labeler for the iGPU's Vulkan allocation pool
+# (2026-10-06 incident: ErrorOutOfDeviceMemory crash loop on :11435).
+# Index vectors are unchanged — same weights.
+
+FROM bge-m3
+PARAMETER num_gpu 0

@@ -39,6 +39,10 @@ which never enters the answerer history. Bare «pdf» without a disease is a 400
 medassistant/            runtime package (config, llm, prompts, abbr, gindex,
                          pipeline, appendix, audit, store, health, stats,
                          canary, regression, cli, server/)
+scripts/                 one-time setup tools (strip_vision_gguf.py)
+models/                  Modelfiles (medgemma-cpu, medgemma-labeler, bge-cpu)
+                         + .backup.modelfile of the pre-text-only definitions;
+                         medgemma1.5-4b-q4km-text-only.gguf source GGUF
 data/docs_meta.json      register metadata, 757 guidelines (copied from gp-eval)
 data/abbr2term.yaml      4,508 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
@@ -61,12 +65,23 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Models (from the gp-eval runbook; per README §5 of gp-eval):
-- main instance (`:11434`, auto-started): `medgemma-cpu` = medgemma1.5:4b with
-  `PARAMETER num_gpu 0` (answerer, thinking on) **and** `bge-m3` (embeddings)
-- second instance (`:11435`, iGPU): `medgemma-labeler` = medgemma1.5:4b with a
-  TEMPLATE override appending an empty `<think></think>` block (thinking OFF —
-  otherwise reasoning eats the token budget and content comes back empty)
+Models (owner decision 2026-10-06: text-only medgemma + CPU-pinned bge after
+the iGPU `ErrorOutOfDeviceMemory` crash loop; base from the gp-eval runbook):
+- main instance (`:11434`, auto-started): `medgemma-cpu` = medgemma1.5:4b
+  **text-only** (vision projector stripped) with `PARAMETER num_gpu 0`
+  (answerer, thinking on) **and** `bge-cpu` = bge-m3 with `PARAMETER num_gpu 0`
+  (embeddings; stays off the iGPU so it never competes with the labeler for
+  the Vulkan allocation pool — index vectors unchanged, same weights)
+- second instance (`:11435`, iGPU): `medgemma-labeler` = medgemma1.5:4b
+  **text-only** with a TEMPLATE override appending an empty `<think></think>`
+  block (thinking OFF — otherwise reasoning eats the token budget and content
+  comes back empty)
+- the vision strip keeps all 444 text tensors byte-identical and only drops
+  the 439 `v.*`/`mm.*` tensors (the ~1 GiB CLIP encoder this text-only
+  pipeline never uses); rebuild after pulling a fresh medgemma1.5:4b:
+  `pip install gguf`, then `python scripts/strip_vision_gguf.py --src <blob>
+  --out models\medgemma1.5-4b-q4km-text-only.gguf` and `ollama create` each
+  variant from `models\*.modelfile` (pre-strip definitions: `*.backup.modelfile`)
 - env once: `setx OLLAMA_IGPU_ENABLE 1`, `setx OLLAMA_MAX_LOADED_MODELS 2`,
   then restart Ollama; after each reboot start everything with
   `powershell -File start_chat.ps1` (repo root; toggle: when everything is

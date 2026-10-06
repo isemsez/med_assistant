@@ -13,3 +13,4 @@ logs/
 .pytest_cache/
 .idea/
 .kilo/plans/
+models/*.gguf

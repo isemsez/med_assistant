@@ -1,0 +1,28 @@
+# medgemma-labeler: text-only MedGemma 1.5 4B (vision projector stripped,
+# see scripts/strip_vision_gguf.py); thinking OFF via the empty <think> block
+# appended after the last turn. Original definition: medgemma-labeler.backup.modelfile
+
+FROM C:\Users\Malay\py\med_assistant\models\medgemma1.5-4b-q4km-text-only.gguf
+TEMPLATE """{{- $lastUserIdx := -1 -}}
+{{- $firstUserIdx := -1 -}}
+{{- range $idx, $msg := .Messages -}}
+{{- if eq $msg.Role "user" }}{{ if lt $firstUserIdx 0 }}{{ $firstUserIdx = $idx }}{{ end }}{{ $lastUserIdx = $idx }}{{ end -}}
+{{- end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 }}
+{{- if eq .Role "user" }}<start_of_turn>user
+{{- if and (eq $i $firstUserIdx) $.System }}{{ $.System }}
+{{ end }}{{ .Content }}<end_of_turn>
+{{ else if eq .Role "assistant" }}<start_of_turn>model
+{{ .Content }}<end_of_turn>
+{{ end }}
+{{- if $last }}<start_of_turn>model
+<think>
+
+</think>
+
+{{ end }}
+{{- end }}
+"""
+PARAMETER stop <end_of_turn>
+PARAMETER temperature 0
