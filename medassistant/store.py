@@ -1,11 +1,13 @@
 """Persistent sessions (SQLite, WAL). Conversations survive restarts.
 
-Tables: sessions(id, title, created_at, updated_at),
+Tables: sessions(id, title, created_at, updated_at, card_file),
 messages(id, session_id, role, content, appendix_json, reasoning, kind,
 created_at). `appendix_json` on assistant rows holds the full AppendixResult
 payload; `reasoning` holds the answerer's thinking text (restored collapsed on
 reload); `kind` separates chat turns from manual «pdf » turns ('pdf' rows
-never enter the answerer history).
+never enter the answerer history). `card_file` pins the last used patient
+card to the session — invisible chat metadata for picker preselection
+(architecture.md §9); message content never contains card text.
 """
 
 import datetime
@@ -22,7 +24,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    card_file TEXT
 );
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,6 +64,10 @@ class Store:
         if "kind" not in cols:
             self.conn.execute(
                 "ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'")
+        s_cols = {r["name"] for r in
+                  self.conn.execute("PRAGMA table_info(sessions)")}
+        if "card_file" not in s_cols:
+            self.conn.execute("ALTER TABLE sessions ADD COLUMN card_file TEXT")
 
     def close(self):
         with self._lock:
@@ -100,6 +107,22 @@ class Store:
             row = self.conn.execute(
                 "SELECT 1 FROM sessions WHERE id=?", (session_id,)).fetchone()
             return row is not None
+
+    def set_session_card(self, session_id, card_file):
+        """Pin the last used patient card to the session (owner decision
+        2026-10-07): invisible metadata for picker preselection — the chat
+        content and the answerer history are unaffected."""
+        with self._lock:
+            self.conn.execute("UPDATE sessions SET card_file=? WHERE id=?",
+                              (card_file, session_id))
+            self.conn.commit()
+
+    def get_session_card(self, session_id):
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT card_file FROM sessions WHERE id=?",
+                (session_id,)).fetchone()
+            return row["card_file"] if row else None
 
     def delete_session(self, session_id):
         """Remove a session with all its messages (one transaction)."""

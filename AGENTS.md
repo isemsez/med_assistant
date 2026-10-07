@@ -36,12 +36,15 @@ which never enters the answerer history. Bare «pdf» without a disease is a 400
 Patient card context (architecture.md §9, demo, owner decision 2026-10-06):
 hand-made `*.выписка.md` files in `data/patient_cards/` (2 fake examples
 ship); `GET /api/cards` lists them. The composer's «Карта пациента» is one
-toggle button (owner decision 2026-10-07): OFF — click opens the picker
-(the pinned last-used name is preselected); ON — shows the patient name,
-click detaches it (the name stays pinned to the page session) and every
-non-pdf question carries the card while ON (a reload clears it — nothing
-stored: the stored user message stays the plain question, the card text
-goes only into the answerer prompt, audit logs filename+chars only).
+toggle button (owner decision 2026-10-07): OFF — click opens the picker;
+ON — shows the patient name, click detaches it, and every non-pdf question
+carries the card while ON. The visible state is per chat session —
+switching chats or reloading resets the button to OFF — but the session
+invisibly remembers its card filename (`sessions.card_file`, pinned on
+pick via `POST /api/sessions/{id}/card`, re-pinned on send; `GET
+/api/sessions/{id}/card` reads it): the picker preselects it,
+highlighted at the bottom of the list (the menu opens upward). Message
+content never stores card text; audit logs filename+chars only.
 Validation (`cards.py`, shared with the CLI): traversal-safe filename,
 `.выписка.md` suffix, size ≤ `CARD_MAX_CHARS` (default 8000) → 400 before
 the question is sent; the file is re-read fresh on every request (the

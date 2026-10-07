@@ -67,6 +67,7 @@ async function deleteSession(s, e) {
   if (s.id === state.current) {
     state.current = null;
     $("#messages").innerHTML = "";
+    resetCardState();
   }
   await refreshSessions();
 }
@@ -167,6 +168,8 @@ async function loadSession(id) {
   const run = (async () => {
     state.current = id;
     $("#messages").innerHTML = "";
+    resetCardState(); // the visible card state never carries across sessions
+    await loadSessionPin(id); // …but the session's pin comes back invisibly
     const r = await api(`/api/sessions/${id}/messages`);
     const msgs = await r.json();
     for (let i = 0; i < msgs.length; i++) {
@@ -234,7 +237,19 @@ const cardState = { card: null, pinned: null }; // card: attached; pinned: last 
 
 function setCard(card) {
   cardState.card = card;
-  if (card) cardState.pinned = card;
+  if (card) {
+    cardState.pinned = card;
+    // pin immediately on pick (owner decision 2026-10-07): the preselection
+    // must survive session switches even when no question was sent; the
+    // send path re-pins as a safety net. Best-effort — no session yet means
+    // the pin simply lives in memory until the first send.
+    if (state.current != null) {
+      api(`/api/sessions/${state.current}/card`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: card.file }),
+      }).catch(() => {});
+    }
+  }
   const btn = $("#card-btn");
   btn.classList.toggle("card-on", !!card);
   btn.textContent = card ? card.name : "Карта пациента";
@@ -243,6 +258,26 @@ function setCard(card) {
     : (cardState.pinned
         ? `Карта пациента (последняя: ${cardState.pinned.name})`
         : "Карта пациента");
+}
+
+// a chat-session switch clears the card entirely (owner decision
+// 2026-10-07): both the attached card and the pinned name are per-session
+function resetCardState() {
+  cardState.pinned = null;
+  setCard(null);
+  $("#card-menu").hidden = true;
+}
+
+// the session's invisible pin (last card used there, stored server-side);
+// loadSession fetches it so the picker can preselect it again
+async function loadSessionPin(id) {
+  try {
+    const c = await (await api(`/api/sessions/${id}/card`)).json();
+    cardState.pinned = c && c.file ? c : null;
+  } catch (e) {
+    cardState.pinned = null;
+  }
+  setCard(cardState.card); // re-render the tooltip with the new session's pin
 }
 
 async function toggleCardMenu() {
@@ -257,17 +292,28 @@ async function toggleCardMenu() {
     empty.textContent = list ? "Нет сохранённых карт" : "Не удалось загрузить карты";
     menu.appendChild(empty);
   } else {
-    // the menu opens only from OFF; the pinned (last used) name is
-    // preselected — one click on it re-attaches the card
+    // the pinned (last used in this session) card is preselected: moved to
+    // the BOTTOM of the list — nearest the click point, the menu opens
+    // upward — and highlighted
     const active = cardState.pinned;
-    for (const c of list) {
+    const ordered = active
+      ? [...list.filter((c) => c.file !== active.file),
+         ...list.filter((c) => c.file === active.file)]
+      : list;
+    let activeNode = null;
+    for (const c of ordered) {
       const item = document.createElement("button");
       item.type = "button";
-      item.className = "card-item" + (active && active.file === c.file ? " active" : "");
+      const isActive = active && active.file === c.file;
+      item.className = "card-item" + (isActive ? " active" : "");
+      if (isActive) activeNode = item;
       item.textContent = c.name;
       item.onclick = () => { setCard(c); menu.hidden = true; };
       menu.appendChild(item);
     }
+    menu.hidden = false;
+    if (activeNode) activeNode.scrollIntoView({ block: "nearest" });
+    return;
   }
   menu.hidden = false;
 }

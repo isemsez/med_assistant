@@ -441,6 +441,62 @@ class TestCards(Base):
         self.assertNotIn(CARD_TEXT.splitlines()[-1],
                          json.dumps(recs, ensure_ascii=False))
 
+    def test_pin_saved_on_send_and_returned(self):
+        sid, _ = self.chat(card=CARD_FILE)
+        r = self.client.get(f"/api/sessions/{sid}/card")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"file": CARD_FILE, "name": "Тестов ТТ"})
+
+    def test_pin_absent_without_card_use(self):
+        sid = self.client.post("/api/sessions", json={"title": ""}).json()["id"]
+        self.assertEqual(self.client.get(f"/api/sessions/{sid}/card").json(),
+                         {"file": None})
+        self.assertEqual(self.client.get("/api/sessions/999/card").status_code,
+                         404)
+
+    def test_pin_survives_cardless_and_pdf_turns(self):
+        sid, _ = self.chat(card=CARD_FILE)
+        self.chat("Без карты?", session_id=sid)
+        self.chat("pdf ХСН", session_id=sid)
+        r = self.client.get(f"/api/sessions/{sid}/card").json()
+        self.assertEqual(r["file"], CARD_FILE, "pin = last used card, kept")
+
+    def test_pin_on_pick_post(self):
+        sid = self.client.post("/api/sessions", json={"title": ""}).json()["id"]
+        r = self.client.post(f"/api/sessions/{sid}/card",
+                             json={"file": CARD_FILE})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            self.client.get(f"/api/sessions/{sid}/card").json(),
+            {"file": CARD_FILE, "name": "Тестов ТТ"})
+
+    def test_pin_post_rejects_unknown_file(self):
+        sid = self.client.post("/api/sessions", json={"title": ""}).json()["id"]
+        r = self.client.post(f"/api/sessions/{sid}/card",
+                             json={"file": "ghost.выписка.md"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(
+            self.client.get(f"/api/sessions/{sid}/card").json(), {"file": None})
+
+    def test_pin_post_clears_with_empty_file(self):
+        sid, _ = self.chat(card=CARD_FILE)
+        r = self.client.post(f"/api/sessions/{sid}/card", json={"file": ""})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            self.client.get(f"/api/sessions/{sid}/card").json(), {"file": None})
+
+    def test_pin_post_unknown_session_404(self):
+        self.assertEqual(
+            self.client.post("/api/sessions/999/card",
+                             json={"file": CARD_FILE}).status_code, 404)
+
+    def test_pin_with_missing_file_dropped(self):
+        sid, _ = self.chat(card=CARD_FILE)
+        srv.app.state.store.set_session_card(sid, "ghost.выписка.md")
+        self.assertEqual(self.client.get(f"/api/sessions/{sid}/card").json(),
+                         {"file": None})
+        self.assertIsNone(srv.app.state.store.get_session_card(sid))
+
 
 class TestStatic(Base):
     def test_index_served(self):

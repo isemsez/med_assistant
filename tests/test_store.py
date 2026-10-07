@@ -46,6 +46,21 @@ class TestStore(unittest.TestCase):
         self.assertEqual(msgs[1]["reasoning"], "думал…")
         self.assertIsNone(msgs[2]["reasoning"])
 
+    def test_session_card_pin_roundtrip(self):
+        a = self.store.create_session()
+        b = self.store.create_session()
+        self.assertIsNone(self.store.get_session_card(a))
+        self.store.set_session_card(a, "Иванов_ИИ.выписка.md")
+        self.assertEqual(self.store.get_session_card(a),
+                         "Иванов_ИИ.выписка.md")
+        self.assertIsNone(self.store.get_session_card(b), "pin is per session")
+        self.store.set_session_card(a, "Петрова_АП.выписка.md")
+        self.assertEqual(self.store.get_session_card(a),
+                         "Петрова_АП.выписка.md")
+        self.store.set_session_card(a, None)
+        self.assertIsNone(self.store.get_session_card(a))
+        self.assertIsNone(self.store.get_session_card(999))
+
     def test_migrates_legacy_db_without_reasoning_column(self):
         import sqlite3
         p = Path(self.tmp.name) / "legacy.db"

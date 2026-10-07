@@ -33,6 +33,10 @@ class SessionRequest(BaseModel):
     title: str = ""
 
 
+class CardPinRequest(BaseModel):
+    file: str = ""  # empty clears the pin
+
+
 @app.on_event("startup")
 def _wire():
     app.state.audit = audit_mod.Audit(config.AUDIT_LOG_PATH)
@@ -102,6 +106,37 @@ def rewind(session_id: int, message_id: int):
     app.state.audit.log("rewind", session_id=session_id,
                         from_message_id=message_id, deleted=deleted)
     return {"deleted": deleted}
+
+
+@app.get("/api/sessions/{session_id}/card")
+def get_session_card(session_id: int):
+    """The session's pinned patient card (the last one picked/used there),
+    for picker preselection — invisible in the chat itself (architecture.md
+    §9). A pin whose file no longer exists is dropped."""
+    if not app.state.store.session_exists(session_id):
+        raise HTTPException(404, "session not found")
+    file = app.state.store.get_session_card(session_id)
+    if not file:
+        return {"file": None}
+    card = next((c for c in cards.list_cards() if c["file"] == file), None)
+    if card is None:
+        app.state.store.set_session_card(session_id, None)
+        return {"file": None}
+    return {"file": card["file"], "name": card["name"]}
+
+
+@app.post("/api/sessions/{session_id}/card")
+def pin_session_card(session_id: int, req: CardPinRequest):
+    """Pin a card to the session the moment the physician picks it in the
+    UI (owner decision 2026-10-07) — so the preselection survives session
+    switches even when no question was sent. The send path re-pins on
+    card_used as a safety net."""
+    if not app.state.store.session_exists(session_id):
+        raise HTTPException(404, "session not found")
+    if req.file and req.file not in {c["file"] for c in cards.list_cards()}:
+        raise HTTPException(400, "unknown card file")
+    app.state.store.set_session_card(session_id, req.file or None)
+    return {"ok": True}
 
 
 STAGE_TEXT = {
@@ -204,6 +239,8 @@ def chat(req: ChatRequest):
             # filename + char count only — card content is never logged
             aud.log("card_used", session_id=sid, file=req.card,
                     chars=len(card_ctx[1]))
+            # pin the card to the session for later picker preselection
+            store.set_session_card(sid, req.card)
 
         parts, reasoning_parts, failed = [], [], False
         t_answer = time.monotonic()

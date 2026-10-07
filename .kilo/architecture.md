@@ -306,18 +306,23 @@ answerer answers *this* question in the context of *this* patient.
    "preencoding" a chat-completions decoder accepts; no vectors involved).
    Two fake examples ship (`Иванов_ИИ`, `Петрова_АП`); `GET /api/cards`
    lists them (a missing dir lists nothing).
-2. **Per-question opt-in, nothing persisted.** The composer has ONE
+2. **Per-question opt-in, invisible session pin.** The composer has ONE
    toggle button (owner decision 2026-10-07, superseding the earlier
    chip + checkbox and +/× sub-button variants): OFF — «Карта пациента»,
-   click opens the picker with the pinned (last used) name preselected;
-   ON — shows the patient name, click detaches it (the name stays pinned
-   to the page session, so the next picker opens with it highlighted).
-   While ON, every non-pdf question carries the card. The selection
-   is in-memory page state — a reload clears it (accepted). **No schema
-   changes, no per-message markers**: the stored user message stays the
-   plain question; the card text exists only inside the answerer LLM call
-   and never enters history, SSE events, or the appendix inputs
-   (`iter_appendix` sees the plain question; labeler calls are unchanged).
+   click opens the picker; ON — shows the patient name, click detaches
+   it. While ON, every non-pdf question carries the card. The *visible*
+   state is per chat session: switching chats (or reloading) resets the
+   button to OFF — but the session invisibly remembers its card
+   (`sessions.card_file`, filename only; pinned the moment a card is
+   PICKED in the UI — `POST /api/sessions/{id}/card` — and re-pinned when
+   a question is sent with it; a pin whose file vanished is dropped).
+   `GET /api/sessions/{id}/card` returns it for the picker preselection:
+   highlighted and placed at the BOTTOM of the list — nearest the click
+   point, since the menu opens upward. **No per-message markers**: the
+   stored user message stays the plain question; the card text exists
+   only inside the answerer LLM call and never enters history, SSE
+   events, or the appendix inputs (`iter_appendix` sees the plain
+   question; labeler calls are unchanged).
 3. **Prompt injection is one place:** `Pipeline._messages` appends
    `prompts.card_block(ФИО, text)` to the user message — a header line
    («Выписка из амбулаторной карты пациента {ФИО} (приложена врачом;
@@ -344,5 +349,5 @@ answerer answers *this* question in the context of *this* patient.
    stored message (`--save`) is the plain question.
 
 Out of scope (future): card upload/creation from the UI; original files
-(pdf/doc/db) with automatic summary regeneration; card state or per-message
-markers in sessions.sqlite; RAG over the card; OCR.
+(pdf/doc/db) with automatic summary regeneration; per-message card markers
+in sessions.sqlite; RAG over the card; OCR.
