@@ -341,6 +341,10 @@ async function send(question) {
           thinking.body.textContent += data.t;
           thinking.open();
           scrollDown();
+        } else if (ev.event === "reasoning_reset") {
+          // degenerate thinking loop aborted upstream; the retry restarts
+          // the reasoning from scratch — drop the looped garbage
+          if (thinking) thinking.body.textContent = "";
         } else if (ev.event === "kind" && data.turn === "pdf") {
           // manual pdf turn renders as ONE row: the question bubble is
           // retitled and re-bodied; the assistant bubble never appears

@@ -190,6 +190,14 @@ canary`, then `python -m medassistant regression` (both live, minutes on CPU).
 
 - Transport-level retries only (429/5xx/timeouts); invalid labeler output is
   never retried — the answer ships with an honest note.
+- Thinking-loop watchdog (owner decision 2026-10-06): a degenerate
+  pre-content reasoning loop (verbatim tail repetition) aborts the answerer
+  stream — closing the connection cancels Ollama generation and frees the
+  CPU — and retries once with `frequency_penalty`
+  (`LOOP_RETRY_FREQ_PENALTY`, only knob family `LOOP_*` in `.env`; the UI
+  gets `reasoning_reset` and drops the looped thinking). A second loop or
+  an empty retry fails with «Сбой генерации ответа»; audit rows:
+  `answerer_loop_abort`, `stage_stop stop_stage=answerer`.
 - 27B tier: swap `CANDIDATE_*` in `.env`; everything else is unchanged.
 - Default browser on this machine is Yandex Browser; `start <url>` (and any
   "open in browser" action) launches it.

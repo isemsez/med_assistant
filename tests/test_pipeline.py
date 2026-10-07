@@ -399,5 +399,98 @@ class TestPromptSilence(unittest.TestCase):
             self.assertIn("JSON", p)
 
 
+class TestStreamAnswerLoopRetry(unittest.TestCase):
+    """The thinking-loop watchdog retry (owner decision 2026-10-06):
+    LLMLoopError -> one retry with the anti-repetition nudge, signalled to
+    the consumer as a reasoning_reset event."""
+
+    EP = {"base_url": "http://x", "api_key": "", "model": "m", "extra_body": {}}
+
+    def setUp(self):
+        from medassistant import config
+        self.config = config
+        self._orig = (config.LOOP_RETRIES, config.LOOP_RETRY_FREQ_PENALTY)
+        config.LOOP_RETRIES, config.LOOP_RETRY_FREQ_PENALTY = 1, 0.5
+        self._orig_stream = llm.chat_stream
+        self.calls = []
+
+    def tearDown(self):
+        self.config.LOOP_RETRIES, self.config.LOOP_RETRY_FREQ_PENALTY = self._orig
+        llm.chat_stream = self._orig_stream
+
+    def _fake_chat_stream(self, plans):
+        """plans: list of per-attempt behaviors — event list or exception."""
+        seq = list(plans)
+
+        def fake(endpoint, messages, max_tokens=None, freq_penalty=None, **kw):
+            self.calls.append(freq_penalty)
+            plan = seq.pop(0)
+            if isinstance(plan, Exception):
+                raise plan
+            yield from plan
+
+        llm.chat_stream = fake
+
+    def _pipe(self, audit=None):
+        return Pipeline(candidate=self.EP, audit=audit)
+
+    def test_loop_aborts_then_retries_with_nudge(self):
+        self._fake_chat_stream([
+            llm.LLMLoopError("degenerate reasoning loop: tail x3"),
+            [{"type": "reasoning", "text": "заново"},
+             {"type": "content", "text": "Ответ."}],
+        ])
+        events = list(self._pipe().stream_answer(Q))
+        self.assertEqual(events, [
+            {"type": "reasoning_reset"},
+            {"type": "reasoning", "text": "заново"},
+            {"type": "content", "text": "Ответ."},
+        ])
+        self.assertEqual(self.calls, [None, 0.5])
+
+    def test_second_loop_raises(self):
+        self._fake_chat_stream([
+            llm.LLMLoopError("loop 1"),
+            llm.LLMLoopError("loop 2"),
+        ])
+        with self.assertRaises(llm.LLMLoopError):
+            list(self._pipe().stream_answer(Q))
+        self.assertEqual(self.calls, [None, 0.5])
+
+    def test_no_retry_when_disabled(self):
+        self.config.LOOP_RETRIES = 0
+        self._fake_chat_stream([llm.LLMLoopError("loop")])
+        with self.assertRaises(llm.LLMLoopError):
+            list(self._pipe().stream_answer(Q))
+        self.assertEqual(self.calls, [None])
+
+    def test_audit_logs_abort(self):
+        import json
+        self._fake_chat_stream([
+            llm.LLMLoopError("degenerate reasoning loop"),
+            [{"type": "content", "text": "Ответ."}],
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = Audit(Path(tmp) / "audit.jsonl")
+            list(self._pipe(audit=audit).stream_answer(Q))
+            recs = [json.loads(l) for l in
+                    (Path(tmp) / "audit.jsonl").read_text(encoding="utf-8")
+                    .splitlines()]
+        self.assertEqual([r["stage"] for r in recs], ["answerer_loop_abort"])
+        self.assertEqual(recs[0]["attempt"], 1)
+
+    def test_clean_stream_has_no_reset(self):
+        self._fake_chat_stream([
+            [{"type": "reasoning", "text": "мысль"},
+             {"type": "content", "text": "Ответ."}],
+        ])
+        events = list(self._pipe().stream_answer(Q))
+        self.assertEqual(events, [
+            {"type": "reasoning", "text": "мысль"},
+            {"type": "content", "text": "Ответ."},
+        ])
+        self.assertEqual(self.calls, [None])
+
+
 if __name__ == "__main__":
     unittest.main()

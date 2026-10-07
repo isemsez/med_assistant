@@ -10,11 +10,20 @@ import time
 
 import httpx
 
+from . import config
+from .loopguard import LoopGuard
+
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
 class LLMError(RuntimeError):
     pass
+
+
+class LLMLoopError(LLMError):
+    """Degenerate repetition in pre-content reasoning — the watchdog
+    aborted the stream (owner decision 2026-10-06). Raising out of the
+    httpx.stream context closes the connection and cancels generation."""
 
 
 def _headers(endpoint):
@@ -75,21 +84,33 @@ def chat(endpoint, messages, temperature=0.0, max_tokens=2048,
 
 
 def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
-                timeout=600, attempts=4):
+                timeout=600, attempts=4, freq_penalty=None):
     """Streaming completion -> generator of typed events:
     {"type": "reasoning", "text": ...} (thinking models) and
     {"type": "content", "text": ...}.
 
     Retried only until the first event has been yielded; after that, a transport
     error surfaces as LLMError (a partial answer cannot be replayed).
+
+    While no content token has arrived, a LoopGuard watches the reasoning
+    stream; a verbatim repetition loop aborts the request with
+    LLMLoopError (retrying mid-content would duplicate streamed text —
+    only the reasoning phase is guarded). `freq_penalty` adds an
+    anti-repetition nudge for the retry attempt (answerer only).
     """
+    kw = {"messages": messages, "temperature": temperature,
+          "max_tokens": max_tokens, "stream": True}
     url = f"{endpoint['base_url']}/chat/completions"
-    body = json.dumps(
-        _payload(endpoint, messages=messages, temperature=temperature,
-                 max_tokens=max_tokens, stream=True),
-        ensure_ascii=False,
-    )
+    payload = _payload(endpoint, **kw)
+    if freq_penalty is not None:  # retry nudge overrides extra_body
+        payload["frequency_penalty"] = freq_penalty
+    body = json.dumps(payload, ensure_ascii=False)
+    guard = LoopGuard(tail_chars=config.LOOP_TAIL_CHARS,
+                      repeats=config.LOOP_REPEATS,
+                      window_chars=config.LOOP_WINDOW_CHARS) \
+        if config.LOOP_GUARD else None
     last = None
+    saw_content = False
     for i in range(attempts):
         got_event = False
         try:
@@ -112,15 +133,21 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
                             continue
                         reasoning = delta.get("reasoning") or delta.get("reasoning_content")
                         if reasoning:
+                            if guard is not None and not saw_content:
+                                reason = guard.feed(reasoning)
+                                if reason:
+                                    raise LLMLoopError(
+                                        f"degenerate reasoning loop: {reason}")
                             got_event = True
                             yield {"type": "reasoning", "text": reasoning}
                         content = delta.get("content")
                         if content:
+                            saw_content = True
                             got_event = True
                             yield {"type": "content", "text": content}
                     return
         except LLMError as e:
-            if got_event:
+            if got_event or isinstance(e, LLMLoopError):
                 raise
             last = e
         except (httpx.HTTPError, OSError) as e:

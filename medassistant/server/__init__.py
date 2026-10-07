@@ -198,6 +198,11 @@ def chat(req: ChatRequest):
                             continue
                     reasoning_parts.append(t)
                     yield _sse("reasoning", {"t": t})
+                elif event["type"] == "reasoning_reset":
+                    # a degenerate thinking loop was aborted upstream; the
+                    # retry restarts reasoning from scratch (2026-10-06)
+                    reasoning_parts, drop = [], len("thought\n")
+                    yield _sse("reasoning_reset", {})
                 else:
                     parts.append(event["text"])
                     yield _sse("token", {"t": event["text"]})

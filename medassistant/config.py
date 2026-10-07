@@ -63,6 +63,16 @@ ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "2048"))
 LABELER_EXTRACT_MAX_TOKENS = int(os.environ.get("LABELER_EXTRACT_MAX_TOKENS", "200"))
 LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "128"))
 
+# Answerer thinking-loop watchdog (owner decision 2026-10-06): abort a
+# degenerate pre-content reasoning loop, retry once with an
+# anti-repetition nudge. LOOP_GUARD=0 disables the watchdog.
+LOOP_GUARD = os.environ.get("LOOP_GUARD", "1") not in {"0", "false", "no"}
+LOOP_TAIL_CHARS = int(os.environ.get("LOOP_TAIL_CHARS", "64"))
+LOOP_REPEATS = int(os.environ.get("LOOP_REPEATS", "3"))
+LOOP_WINDOW_CHARS = int(os.environ.get("LOOP_WINDOW_CHARS", "4096"))
+LOOP_RETRIES = int(os.environ.get("LOOP_RETRIES", "1"))
+LOOP_RETRY_FREQ_PENALTY = float(os.environ.get("LOOP_RETRY_FREQ_PENALTY", "0.5"))
+
 
 def _endpoint(prefix):
     extra = os.environ.get(f"{prefix}_EXTRA_BODY", "").strip()

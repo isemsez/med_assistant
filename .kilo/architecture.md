@@ -95,6 +95,22 @@ final answer = raw answer + appendix block (local PDF links only)
   either: the model has no such instinct to suppress, and naming the behavior
   in a negation would only plant it.
 - Today: main Ollama instance, CPU, thinking on, 2048-token budget.
+- **Thinking-loop watchdog** (owner decision 2026-10-06): the reasoning
+  stream occasionally collapses into a verbatim repetition loop that burns
+  the whole budget (minutes of CPU, blocked composer, empty turn). While
+  no answer token has arrived yet, `llm.chat_stream` feeds every reasoning
+  delta into a `LoopGuard`; when the last `LOOP_TAIL_CHARS` chars repeat
+  `LOOP_REPEATS` times inside a `LOOP_WINDOW_CHARS` rolling buffer, the
+  request is aborted (`LLMLoopError` raised out of the stream context —
+  closing the connection cancels Ollama generation and frees the CPU).
+  The pipeline then retries once with an anti-repetition nudge
+  (`LOOP_RETRY_FREQ_PENALTY`), emitting `reasoning_reset` so the UI drops
+  the looped garbage; a second loop or an empty retry fails with the
+  honest «Сбой генерации ответа» note. Not a semantic retry: the prompt
+  and content are untouched, only the sampler is nudged on a turn that
+  was already lost. Loops after the first answer token are not guarded
+  (aborting there would duplicate streamed text); `num_predict` bounds
+  them as before.
 
 ### [2] Labeler — extraction call
 

@@ -192,6 +192,32 @@ class TestChat(Base):
         msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
         self.assertEqual(msgs[1]["reasoning"], "мысль")
 
+    def test_reasoning_reset_clears_thinking(self):
+        # watchdog aborted a looped stream upstream; the retry restarts
+        # reasoning (stray "thought\n" prefix dropped again) and only the
+        # fresh reasoning is streamed and stored (owner decision 2026-10-06)
+        self.pipe.answer_events = [
+            {"type": "reasoning", "text": "loop"},
+            {"type": "reasoning_reset"},
+            {"type": "reasoning", "text": "thought\nзаново"},
+            {"type": "content", "text": "Ответ."},
+        ]
+        sid, events = self.chat()
+        self.assertIn(("reasoning_reset", {}), events)
+        reasoning = "".join(d["t"] for e, d in events if e == "reasoning")
+        self.assertEqual(reasoning, "заново")
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertEqual(msgs[1]["reasoning"], "заново")
+
+    def test_double_loop_fails_honestly(self):
+        self.pipe.answer_events = llm.LLMLoopError(
+            "degenerate reasoning loop: tail x3")
+        sid, events = self.chat()
+        names = [e for e, _ in events]
+        self.assertIn("error", names)
+        done = dict(events)["done"]
+        self.assertIsNone(done["message_id"])
+
     def test_history_passed_to_answerer(self):
         sid, _ = self.chat("Первый вопрос?")
         self.chat("Второй вопрос?", session_id=sid)

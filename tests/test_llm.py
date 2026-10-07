@@ -111,6 +111,7 @@ class TestChatStream(unittest.TestCase):
         self._orig_sleep = llm._sleep
         llm._sleep = lambda i: None
         self._orig_stream = httpx.stream
+        self.last_kw = {}
 
     def tearDown(self):
         llm._sleep = self._orig_sleep
@@ -138,7 +139,11 @@ class TestChatStream(unittest.TestCase):
             def iter_lines(self):
                 return iter(self._lines)
 
-        httpx.stream = lambda method, url, **kw: FakeStreamResp()
+        def fake(method, url, **kw):
+            self.last_kw = kw
+            return FakeStreamResp()
+
+        httpx.stream = fake
 
     def test_reasoning_and_content_events(self):
         self._patch([
@@ -163,6 +168,64 @@ class TestChatStream(unittest.TestCase):
         ])
         self.assertEqual(list(llm.chat_stream(self.EP, [])),
                          [{"type": "reasoning", "text": "rc"}])
+
+    # -- thinking-loop watchdog (owner decision 2026-10-06) ----------------
+
+    def _loop_lines(self):
+        phrase = "негиперпигментационные, негиперкератотические, "
+        lines = ['data: {"choices":[{"delta":{"reasoning":"мысль. "}}]}']
+        for _ in range(8):
+            lines.append("data: " + json.dumps(
+                {"choices": [{"delta": {"reasoning": phrase}}]},
+                ensure_ascii=False))
+        lines.append("data: [DONE]")
+        return lines
+
+    def test_loop_aborts_pre_content(self):
+        self._patch(self._loop_lines())
+        events = []
+        with self.assertRaises(llm.LLMLoopError):
+            for ev in llm.chat_stream(self.EP, []):
+                events.append(ev)
+        self.assertTrue(events)  # some reasoning streamed before the trip
+
+    def test_no_abort_after_content(self):
+        # a loop after the first answer token must not abort the stream
+        lines = ['data: {"choices":[{"delta":{"content":"Ответ"}}]}']
+        lines += self._loop_lines()[1:]
+        self._patch(lines)
+        events = list(llm.chat_stream(self.EP, []))
+        self.assertEqual(events[0], {"type": "content", "text": "Ответ"})
+        self.assertEqual(len([e for e in events
+                              if e["type"] == "reasoning"]), 8)
+
+    def test_loop_guard_disabled(self):
+        from medassistant import config
+        orig = config.LOOP_GUARD
+        config.LOOP_GUARD = False
+        try:
+            self._patch(self._loop_lines())
+            events = list(llm.chat_stream(self.EP, []))
+        finally:
+            config.LOOP_GUARD = orig
+        self.assertEqual(len(events), 9)
+
+    def test_freq_penalty_in_payload_and_overrides_extra_body(self):
+        self._patch(["data: [DONE]"])
+        list(llm.chat_stream(self.EP, [], freq_penalty=0.5))
+        self.assertEqual(json.loads(self.last_kw["content"])
+                         ["frequency_penalty"], 0.5)
+        ep = {**self.EP, "extra_body": {"frequency_penalty": 0.1}}
+        self._patch(["data: [DONE]"])
+        list(llm.chat_stream(ep, [], freq_penalty=0.5))
+        self.assertEqual(json.loads(self.last_kw["content"])
+                         ["frequency_penalty"], 0.5)
+
+    def test_no_freq_penalty_by_default(self):
+        self._patch(["data: [DONE]"])
+        list(llm.chat_stream(self.EP, []))
+        self.assertNotIn("frequency_penalty",
+                         json.loads(self.last_kw["content"]))
 
 
 class TestPayload(unittest.TestCase):
