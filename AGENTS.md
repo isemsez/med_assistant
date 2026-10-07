@@ -135,9 +135,11 @@ powershell -File start_chat.ps1 -Canary        # force the startup canary
 Launch modes (owner decision 2026-10-04): BARE invocation (no arguments) =
 hand-clicked (Explorer / Total Commander double-click) — after the backends
 start, a 5 s countdown offers the canary (press any key to run it, timeout
-skips) and the console closes on its own after a short linger (10 s after a
-start, 2 s after a stop). ANY argument = deliberate CLI run: no offer, no
-linger (`-SkipCanary` is the
+skips); a smooth run closes the console on its own after a short linger
+(10 s after a start, 2 s after a stop), while on any failure — canary
+failure or an unexpected error — the window stays open until a key is
+pressed: no auto-close on error (owner decision 2026-10-07). ANY argument =
+deliberate CLI run: no offer, no linger (`-SkipCanary` is the
 plain CLI full-start). The canary runs before the web app (~40 s: health
 checks + one E2E question; it also warms the models, so the first real
 question is faster afterwards). On canary failure the stack still comes up

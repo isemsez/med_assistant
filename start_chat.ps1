@@ -15,9 +15,11 @@
 #
 # Launch modes (owner decision 2026-10-04): BARE (no arguments) = hand-click
 # (Explorer / Total Commander double-click): a 5 s canary offer appears
-# after the backends start (any key runs it, timeout skips) and the console
-# lingers before closing on its own (10 s after a start, 2 s after a
-# stop). ANY argument = deliberate CLI run: no offer, no linger.
+# after the backends start (any key runs it, timeout skips); a SMOOTH run
+# closes the console on its own after a short linger (10 s after a start,
+# 2 s after a stop), on ANY error the window stays open until a keypress -
+# no auto-close on error (owner decision 2026-10-07). ANY argument =
+# deliberate CLI run: no offer, no linger.
 # Start sequence: both Ollama instances -> (optional) startup canary ->
 # web app -> open http://127.0.0.1:8866 in the default browser. The canary
 # (~40 s: health checks + one E2E question; it also warms the models, so
@@ -45,13 +47,28 @@ $ollamaExe = "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe"
 $py = "$root\.venv\Scripts\python.exe"
 
 function Quit([int]$code = 0, [double]$pauseSec = 10) {
-    # linger on hand-clicked (bare) runs so the messages can be read
-    # (10 s after a start, 2 s after a stop), then close on its own;
-    # CLI runs exit immediately
-    if ($NoArgs -and $pauseSec -gt 0) {
-        ""
-        "closing in $($pauseSec)s..."
-        Start-Sleep -Milliseconds ([int]($pauseSec * 1000))
+    # exit-time behavior, BARE (hand-clicked) runs only; CLI runs exit
+    # immediately. Smooth runs linger (10 s after a start, 2 s after a
+    # stop) then close on their own; ERROR runs (non-zero exit) never
+    # auto-close - they wait for a keypress (buffered keys are drained
+    # first) so the output can be read; a non-interactive console (input
+    # redirected) falls back to a bounded 60 s linger
+    if ($NoArgs) {
+        if ($code -ne 0) {
+            ""
+            Write-Host "ERROR - press ANY KEY to close..." -ForegroundColor Red
+            try {
+                while ([Console]::KeyAvailable) { $null = [Console]::ReadKey($true) }
+                while (-not [Console]::KeyAvailable) { Start-Sleep -Milliseconds 200 }
+                $null = [Console]::ReadKey($true)
+            }
+            catch { Start-Sleep -Seconds 60 }
+        }
+        elseif ($pauseSec -gt 0) {
+            ""
+            "closing in $($pauseSec)s..."
+            Start-Sleep -Milliseconds ([int]($pauseSec * 1000))
+        }
     }
     exit $code
 }
@@ -176,98 +193,110 @@ function Stop-ByPort([int]$port, [string]$procPattern, [string]$label) {
     }
 }
 
-# Managed components (web excluded by -SkipWeb in both directions).
-$components = @(
-    @{ Port = $webPort; Label = "web app";        Proc = "python*" }
-    @{ Port = 11434;   Label = "main Ollama";     Proc = "ollama*" }
-    @{ Port = 11435;   Label = "labeler Ollama";  Proc = "ollama*" }
-)
-if ($SkipWeb) { $components = @($components | Where-Object { $_.Port -ne $webPort }) }
+# --- main flow (try/catch: uncaught terminating errors must route through
+# --- Quit, or a bare-run window would vanish instantly on them) -------------
+try {
+    # Managed components (web excluded by -SkipWeb in both directions).
+    $components = @(
+        @{ Port = $webPort; Label = "web app";        Proc = "python*" }
+        @{ Port = 11434;   Label = "main Ollama";     Proc = "ollama*" }
+        @{ Port = 11435;   Label = "labeler Ollama";  Proc = "ollama*" }
+    )
+    if ($SkipWeb) { $components = @($components | Where-Object { $_.Port -ne $webPort }) }
 
-# --- toggle: if anything managed is up, stop everything managed ------------
-$up = @($components | Where-Object { Test-PortOpen $_.Port })
-if ($up.Count -gt 0) {
+    # --- toggle: if anything managed is up, stop everything managed --------
+    $up = @($components | Where-Object { Test-PortOpen $_.Port })
+    if ($up.Count -gt 0) {
+        if ($Foreground) {
+            Write-Warning "-Foreground applies only to starting; stopping instead."
+        }
+        "Stopping assistant (re-run to start again):"
+        foreach ($c in $components) { Stop-ByPort $c.Port $c.Proc $c.Label }
+        Quit 0 2
+    }
+
+    # --- start everything ---------------------------------------------------
+    "Starting assistant:"
+    Write-Host ""
+
+    # 1) main instance (answerer medgemma-cpu + bge-m3), default host :11434.
+    #    MUST run before the labeler env vars are set - otherwise it would
+    #    inherit OLLAMA_HOST=:11435.
+    if (Test-PortOpen 11434) { "main Ollama :11434 already up" }
+    else {
+        Start-OllamaHidden "main"
+        Wait-PortOpen 11434; "main Ollama :11434 started"
+    }
+
+    # 2) labeler instance, iGPU/Vulkan, :11435. The web app does NOT read these
+    #    vars (Python config uses its own *_BASE_URL keys), so inheriting them
+    #    is harmless.
+    if (Test-PortOpen 11435) { "labeler Ollama :11435 already up" }
+    else {
+        $env:OLLAMA_HOST = "127.0.0.1:11435"
+        $env:OLLAMA_VULKAN = "true"
+        $env:OLLAMA_IGPU_ENABLE = "1"
+        Start-OllamaHidden "labeler"
+        Wait-PortOpen 11435; "labeler Ollama :11435 started"
+    }
+
+    if (-not (Test-Path $py)) { Write-Warning ".venv not found - see AGENTS.md Setup"; Quit 1 }
+
+    # 3) startup canary (owner decision 2026-10-04). The 5 s offer appears only
+    #    on BARE runs (hand-click); any argument means CLI and skips it,
+    #    -Canary forces the run. Runs before the web app: the whole chain is
+    #    verified (and the models warmed) first; on failure the stack still
+    #    comes up and the script exits 1 at the very end.
+    $runCanary = [bool]$Canary
+    if (-not $runCanary -and -not $SkipCanary -and $NoArgs) { $runCanary = Request-CanaryRun 5 }
+    $canaryFailed = $false
+    if ($runCanary) {
+        "running canary (health checks + one E2E question, ~40 s)..."
+        Push-Location $root
+        try { & $py -m medassistant canary }
+        finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0) {
+            $canaryFailed = $true
+            Write-Warning ("CANARY FAILED - the stack still comes up; check the " +
+                           "output above, /admin and logs/ollama-*.log")
+        }
+    }
+
+    # 4) web app. Run from $root: the package is not installed, uvicorn imports
+    #    medassistant from the repo root via CWD on sys.path. Once the port
+    #    binds, the URL opens in the default browser.
+    if ($SkipWeb) {
+        "skipping web app (-SkipWeb)"
+        if ($canaryFailed) { Quit 1 }
+        Quit 0
+    }
     if ($Foreground) {
-        Write-Warning "-Foreground applies only to starting; stopping instead."
+        "web app in foreground (Ctrl+C stops only the web app)"
+        Start-BrowserWhenUp $webPort
+        Push-Location $root
+        try { & $py -m uvicorn medassistant.server:app --host 127.0.0.1 --port $webPort }
+        finally { Pop-Location }
     }
-    "Stopping assistant (re-run to start again):"
-    foreach ($c in $components) { Stop-ByPort $c.Port $c.Proc $c.Label }
-    Quit 0 2
-}
-
-# --- start everything -------------------------------------------------------
-"Starting assistant:"
-Write-Host ""
-
-# 1) main instance (answerer medgemma-cpu + bge-m3), default host :11434.
-#    MUST run before the labeler env vars are set - otherwise it would
-#    inherit OLLAMA_HOST=:11435.
-if (Test-PortOpen 11434) { "main Ollama :11434 already up" }
-else {
-    Start-OllamaHidden "main"
-    Wait-PortOpen 11434; "main Ollama :11434 started"
-}
-
-# 2) labeler instance, iGPU/Vulkan, :11435. The web app does NOT read these
-#    vars (Python config uses its own *_BASE_URL keys), so inheriting them
-#    is harmless.
-if (Test-PortOpen 11435) { "labeler Ollama :11435 already up" }
-else {
-    $env:OLLAMA_HOST = "127.0.0.1:11435"
-    $env:OLLAMA_VULKAN = "true"
-    $env:OLLAMA_IGPU_ENABLE = "1"
-    Start-OllamaHidden "labeler"
-    Wait-PortOpen 11435; "labeler Ollama :11435 started"
-}
-
-if (-not (Test-Path $py)) { Write-Warning ".venv not found - see AGENTS.md Setup"; Quit 1 }
-
-# 3) startup canary (owner decision 2026-10-04). The 5 s offer appears only
-#    on BARE runs (hand-click); any argument means CLI and skips it,
-#    -Canary forces the run. Runs before the web app: the whole chain is
-#    verified (and the models warmed) first; on failure the stack still
-#    comes up and the script exits 1 at the very end.
-$runCanary = [bool]$Canary
-if (-not $runCanary -and -not $SkipCanary -and $NoArgs) { $runCanary = Request-CanaryRun 5 }
-$canaryFailed = $false
-if ($runCanary) {
-    "running canary (health checks + one E2E question, ~40 s)..."
-    Push-Location $root
-    try { & $py -m medassistant canary }
-    finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0) {
-        $canaryFailed = $true
-        Write-Warning ("CANARY FAILED - the stack still comes up; check the " +
-                       "output above, /admin and logs/ollama-*.log")
+    else {
+        Start-Process $py `
+            -ArgumentList "-m","uvicorn","medassistant.server:app","--host","127.0.0.1","--port",$webPort `
+            -WorkingDirectory $root -WindowStyle Hidden `
+            -RedirectStandardOutput "$root\logs\web-$bootStamp.out.log" `
+            -RedirectStandardError "$root\logs\web-$bootStamp.err.log"
+        Remove-OldBootLogs "web"
+        Wait-PortOpen $webPort
+        Start-Process "http://127.0.0.1:$webPort"
+        "web app started -> http://127.0.0.1:$webPort (opened in the default browser;"
+        "logs: logs\web-$bootStamp.out.log / .err.log)"
     }
-}
-
-# 4) web app. Run from $root: the package is not installed, uvicorn imports
-#    medassistant from the repo root via CWD on sys.path. Once the port
-#    binds, the URL opens in the default browser.
-if ($SkipWeb) {
-    "skipping web app (-SkipWeb)"
     if ($canaryFailed) { Quit 1 }
     Quit 0
 }
-if ($Foreground) {
-    "web app in foreground (Ctrl+C stops only the web app)"
-    Start-BrowserWhenUp $webPort
-    Push-Location $root
-    try { & $py -m uvicorn medassistant.server:app --host 127.0.0.1 --port $webPort }
-    finally { Pop-Location }
+catch {
+    # uncaught terminating error: report and exit through Quit so bare
+    # runs wait for a keypress instead of the window closing instantly
+    Write-Host ""
+    Write-Host "UNEXPECTED ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    if ($_.ScriptStackTrace) { Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray }
+    Quit 1
 }
-else {
-    Start-Process $py `
-        -ArgumentList "-m","uvicorn","medassistant.server:app","--host","127.0.0.1","--port",$webPort `
-        -WorkingDirectory $root -WindowStyle Hidden `
-        -RedirectStandardOutput "$root\logs\web-$bootStamp.out.log" `
-        -RedirectStandardError "$root\logs\web-$bootStamp.err.log"
-    Remove-OldBootLogs "web"
-    Wait-PortOpen $webPort
-    Start-Process "http://127.0.0.1:$webPort"
-    "web app started -> http://127.0.0.1:$webPort (opened in the default browser;"
-    "logs: logs\web-$bootStamp.out.log / .err.log)"
-}
-if ($canaryFailed) { Quit 1 }
-Quit 0
