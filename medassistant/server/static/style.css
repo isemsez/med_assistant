@@ -89,23 +89,19 @@ details.thinking .think-body {
   border-radius: 10px; padding: 10px 18px; font: inherit; cursor: pointer; }
 .btn-primary:disabled { opacity: 0.5; cursor: default; }
 
-/* patient-card picker (owner decision 2026-10-06): chip + «С картой» + menu;
-   state is per-page only — nothing about the card is ever persisted */
+/* patient-card toggle (owner decision 2026-10-07): ONE composer button —
+   OFF «Карта пациента» opens the picker (pinned name highlighted); ON
+   shows the name, click detaches (the name stays pinned to the page).
+   State is per-page only — nothing about the card is ever persisted */
 #composer-area { position: relative; }
-#card-bar { display: flex; align-items: center; padding: 0 32px 8px;
-  background: var(--bg); font-size: 13px; }
-.chip { display: inline-flex; align-items: center; gap: 2px; background: #e2eef7;
-  border: 1px solid #bcd8ec; border-radius: 999px; padding: 3px 4px 3px 12px; }
-.chip-name { font-weight: 600; }
-#card-clear { border: 0; background: none; color: var(--muted); font: inherit;
-  line-height: 1.2; padding: 0 6px; border-radius: 999px; cursor: pointer; }
-#card-clear:hover { color: var(--err); background: var(--err-bg); }
-.btn-card { background: var(--panel); color: var(--ink); border: 1px solid #c9d3dc;
+#card-btn { background: var(--panel); color: var(--ink); border: 1px solid #c9d3dc;
   border-radius: 10px; padding: 10px 14px; font: inherit; cursor: pointer;
-  white-space: nowrap; }
-.btn-card:hover { border-color: var(--accent); color: var(--accent); }
-.card-attach { display: inline-flex; align-items: center; gap: 5px; font-size: 13px;
-  color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap; }
+  white-space: nowrap; flex: none; }
+#card-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* ON: a patient is attached — accent tint marks the state */
+#card-btn.card-on { border-color: var(--accent); background: #e2eef7;
+  color: var(--accent); font-weight: 600; }
+#card-btn.card-on:hover { background: #d3e6f5; }
 #card-menu { position: absolute; bottom: calc(100% + 6px); left: 32px; z-index: 20;
   background: var(--panel); border: 1px solid #c9d3dc; border-radius: 10px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12); min-width: 280px; max-width: 420px;

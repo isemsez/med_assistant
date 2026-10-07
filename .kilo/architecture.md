@@ -306,9 +306,13 @@ answerer answers *this* question in the context of *this* patient.
    "preencoding" a chat-completions decoder accepts; no vectors involved).
    Two fake examples ship (`Иванов_ИИ`, `Петрова_АП`); `GET /api/cards`
    lists them (a missing dir lists nothing).
-2. **Per-question opt-in, nothing persisted.** The UI has a «Карта
-   пациента» picker in the composer; a picked card shows a chip above the
-   composer and auto-checks «С картой» next to «Отправить». The selection
+2. **Per-question opt-in, nothing persisted.** The composer has ONE
+   toggle button (owner decision 2026-10-07, superseding the earlier
+   chip + checkbox and +/× sub-button variants): OFF — «Карта пациента»,
+   click opens the picker with the pinned (last used) name preselected;
+   ON — shows the patient name, click detaches it (the name stays pinned
+   to the page session, so the next picker opens with it highlighted).
+   While ON, every non-pdf question carries the card. The selection
    is in-memory page state — a reload clears it (accepted). **No schema
    changes, no per-message markers**: the stored user message stays the
    plain question; the card text exists only inside the answerer LLM call

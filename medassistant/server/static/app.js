@@ -224,18 +224,25 @@ function scrollDown() {
 
 // ---------- patient card (per-question prompt context; never persisted) ----------
 
-// In-memory only (owner decision 2026-10-06): a page reload clears the
-// selection; the card travels in the chat request, never in the stored text.
-const cardState = { card: null }; // {file, name}
+// ONE toggle button (owner decision 2026-10-07): OFF — «Карта пациента»,
+// click opens the picker with the pinned (last used) name highlighted;
+// ON — shows the patient name, click detaches it (the name stays pinned
+// to the page session). While ON every non-pdf question carries the card.
+// In-memory only: a reload clears everything; the card travels in the
+// chat request, never in the stored text.
+const cardState = { card: null, pinned: null }; // card: attached; pinned: last used
 
 function setCard(card) {
   cardState.card = card;
-  $("#card-bar").hidden = !card;
-  $("#card-attach").hidden = !card;
-  if (card) {
-    $("#card-bar .chip-name").textContent = card.name;
-    $("#card-use").checked = true; // ON by default once a card is picked
-  }
+  if (card) cardState.pinned = card;
+  const btn = $("#card-btn");
+  btn.classList.toggle("card-on", !!card);
+  btn.textContent = card ? card.name : "Карта пациента";
+  btn.title = card
+    ? `Карта пациента: ${card.name} — нажмите, чтобы убрать`
+    : (cardState.pinned
+        ? `Карта пациента (последняя: ${cardState.pinned.name})`
+        : "Карта пациента");
 }
 
 async function toggleCardMenu() {
@@ -250,10 +257,13 @@ async function toggleCardMenu() {
     empty.textContent = list ? "Нет сохранённых карт" : "Не удалось загрузить карты";
     menu.appendChild(empty);
   } else {
+    // the menu opens only from OFF; the pinned (last used) name is
+    // preselected — one click on it re-attaches the card
+    const active = cardState.pinned;
     for (const c of list) {
       const item = document.createElement("button");
       item.type = "button";
-      item.className = "card-item" + (cardState.card && cardState.card.file === c.file ? " active" : "");
+      item.className = "card-item" + (active && active.file === c.file ? " active" : "");
       item.textContent = c.name;
       item.onclick = () => { setCard(c); menu.hidden = true; };
       menu.appendChild(item);
@@ -311,11 +321,9 @@ async function send(question) {
       sid = (await r.json()).id;
       state.current = sid;
     }
-    // card applies only when one is active, the checkbox is on, and the
-    // message is not a pdf turn (belt and suspenders — the server also
-    // ignores cards on that path)
-    const useCard = cardState.card && !$("#card-attach").hidden
-      && $("#card-use").checked && pdfPayload(question) === "";
+    // the card applies while a patient is selected and the message is not
+    // a pdf turn (belt and suspenders — the server also ignores that path)
+    const useCard = cardState.card && pdfPayload(question) === "";
     const resp = await fetch("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(useCard
@@ -469,8 +477,10 @@ $("#question").addEventListener("keydown", (e) => {
   }
 });
 $("#new-session").addEventListener("click", newSession);
-$("#card-btn").addEventListener("click", toggleCardMenu);
-$("#card-clear").addEventListener("click", () => setCard(null));
+$("#card-btn").addEventListener("click", () => {
+  if (cardState.card) setCard(null); // ON click detaches; the name stays pinned
+  else toggleCardMenu();             // OFF click opens the picker
+});
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#card-btn") && !e.target.closest("#card-menu"))
     $("#card-menu").hidden = true;
