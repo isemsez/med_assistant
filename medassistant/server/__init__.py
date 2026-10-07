@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from .. import audit as audit_mod
 from .. import store as store_mod
-from .. import appendix, config, health, llm, stats
+from .. import appendix, cards, config, health, llm, stats
 from ..pipeline import load_pipeline, split_pdf_prefix
 from ..store import load_store
 
@@ -26,6 +26,7 @@ app = FastAPI(title="med_assistant", docs_url=None, redoc_url=None)
 class ChatRequest(BaseModel):
     session_id: int
     question: str
+    card: str | None = None  # patient-card filename; ignored on pdf turns
 
 
 class SessionRequest(BaseModel):
@@ -54,6 +55,12 @@ def get_stats(days: int = 7):
     """Audit-log aggregates (admin page data source)."""
     days = min(max(days, 1), 90)
     return stats.collect(config.AUDIT_LOG_PATH, days=days)
+
+
+@app.get("/api/cards")
+def get_cards():
+    """Patient cards for the composer picker (architecture.md §9)."""
+    return cards.list_cards()
 
 
 @app.get("/admin")
@@ -152,6 +159,18 @@ def chat(req: ChatRequest):
         raise HTTPException(400, "укажите заболевание после «pdf»")
     sid = req.session_id
 
+    # patient card (owner decision 2026-10-06): pdf turns ignore it entirely;
+    # otherwise validate and re-read fresh — the doctor may have edited it.
+    # Any violation 400s before the question is sent.
+    card_ctx = None
+    if pdf_payload is None and req.card:
+        try:
+            card_ctx = cards.load_card(req.card)
+        except cards.CardError as e:
+            aud.log("card_rejected", session_id=sid, file=req.card,
+                    error=str(e))
+            raise HTTPException(400, str(e))
+
     if pdf_payload is not None:
         def gen():
             # manual pdf turn (owner decision 2026-10-04): labeler 1 in direct
@@ -181,6 +200,10 @@ def chat(req: ChatRequest):
         mid_user = store.add_message(sid, "user", question)
         store.touch(sid, title=question[:60])
         aud.log("question", session_id=sid, question=question)
+        if card_ctx is not None:
+            # filename + char count only — card content is never logged
+            aud.log("card_used", session_id=sid, file=req.card,
+                    chars=len(card_ctx[1]))
 
         parts, reasoning_parts, failed = [], [], False
         t_answer = time.monotonic()
@@ -188,7 +211,7 @@ def chat(req: ChatRequest):
         # arrives split across stream deltas, so it is dropped char-wise
         drop = len("thought\n")
         try:
-            for event in pipe.stream_answer(question, history):
+            for event in pipe.stream_answer(question, history, card=card_ctx):
                 if event["type"] == "reasoning":
                     t = event["text"]
                     if drop:

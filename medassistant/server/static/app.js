@@ -222,6 +222,46 @@ function scrollDown() {
   $("#messages").scrollTop = $("#messages").scrollHeight;
 }
 
+// ---------- patient card (per-question prompt context; never persisted) ----------
+
+// In-memory only (owner decision 2026-10-06): a page reload clears the
+// selection; the card travels in the chat request, never in the stored text.
+const cardState = { card: null }; // {file, name}
+
+function setCard(card) {
+  cardState.card = card;
+  $("#card-bar").hidden = !card;
+  $("#card-attach").hidden = !card;
+  if (card) {
+    $("#card-bar .chip-name").textContent = card.name;
+    $("#card-use").checked = true; // ON by default once a card is picked
+  }
+}
+
+async function toggleCardMenu() {
+  const menu = $("#card-menu");
+  if (!menu.hidden) { menu.hidden = true; return; }
+  let list = null;
+  try { list = await (await fetch("/api/cards")).json(); } catch (e) { /* offline */ }
+  menu.innerHTML = "";
+  if (!list || !list.length) {
+    const empty = document.createElement("div");
+    empty.className = "card-empty";
+    empty.textContent = list ? "Нет сохранённых карт" : "Не удалось загрузить карты";
+    menu.appendChild(empty);
+  } else {
+    for (const c of list) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "card-item" + (cardState.card && cardState.card.file === c.file ? " active" : "");
+      item.textContent = c.name;
+      item.onclick = () => { setCard(c); menu.hidden = true; };
+      menu.appendChild(item);
+    }
+  }
+  menu.hidden = false;
+}
+
 // ---------- streaming ----------
 
 function makeThinkingBlock(asst) {
@@ -271,9 +311,16 @@ async function send(question) {
       sid = (await r.json()).id;
       state.current = sid;
     }
+    // card applies only when one is active, the checkbox is on, and the
+    // message is not a pdf turn (belt and suspenders — the server also
+    // ignores cards on that path)
+    const useCard = cardState.card && !$("#card-attach").hidden
+      && $("#card-use").checked && pdfPayload(question) === "";
     const resp = await fetch("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sid, question }),
+      body: JSON.stringify(useCard
+        ? { session_id: sid, question, card: cardState.card.file }
+        : { session_id: sid, question }),
     });
     if (!resp.ok || !resp.body) throw new Error(`${resp.status} ${await resp.text()}`);
 
@@ -422,5 +469,11 @@ $("#question").addEventListener("keydown", (e) => {
   }
 });
 $("#new-session").addEventListener("click", newSession);
+$("#card-btn").addEventListener("click", toggleCardMenu);
+$("#card-clear").addEventListener("click", () => setCard(null));
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#card-btn") && !e.target.closest("#card-menu"))
+    $("#card-menu").hidden = true;
+});
 
 refreshSessions().then(() => { if (state.sessions.length) loadSession(state.sessions[0].id); });

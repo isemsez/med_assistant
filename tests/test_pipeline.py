@@ -385,6 +385,58 @@ class TestManualAppendix(unittest.TestCase):
                                 if r["stage"] == "diseases"))
 
 
+class TestCardContext(unittest.TestCase):
+    ENDPOINT = {"base_url": "http://x/v1", "api_key": "k", "model": "m",
+                "extra_body": {}}
+
+    def test_card_block_lands_in_user_message(self):
+        pipe = make_pipe()
+        msgs = pipe._messages(Q, None, card=("Иванов ИИ", "текст выписки"))
+        self.assertEqual(msgs[0]["role"], "system")
+        self.assertEqual(msgs[-1]["role"], "user")
+        content = msgs[-1]["content"]
+        self.assertTrue(content.startswith(
+            f"{Q}\n\nВыписка из амбулаторной карты пациента Иванов ИИ"))
+        self.assertIn("текст выписки", content)
+
+    def test_no_card_keeps_plain_question(self):
+        pipe = make_pipe()
+        msgs = pipe._messages(Q, [{"role": "user", "content": "было"}])
+        self.assertEqual(msgs[-1]["content"], Q)
+        self.assertEqual(msgs[1]["content"], "было")  # history untouched
+
+    def test_stream_answer_forwards_card(self):
+        from unittest.mock import patch
+        pipe = make_pipe()
+        pipe.candidate = self.ENDPOINT
+        seen = {}
+
+        def fake_stream(endpoint, messages, **kw):
+            seen["messages"] = messages
+            yield {"type": "content", "text": "ok"}
+
+        with patch.object(llm, "chat_stream", fake_stream):
+            events = list(pipe.stream_answer(Q, card=("Иванов ИИ", "текст")))
+        self.assertEqual(events[-1]["text"], "ok")
+        self.assertTrue(seen["messages"][-1]["content"].startswith(
+            f"{Q}\n\nВыписка"))
+
+    def test_answer_forwards_card(self):
+        from unittest.mock import patch
+        pipe = make_pipe()
+        pipe.candidate = self.ENDPOINT
+        seen = {}
+
+        def fake_chat(endpoint, messages, **kw):
+            seen["messages"] = messages
+            return "ok"
+
+        with patch.object(llm, "chat", fake_chat):
+            out = pipe.answer(Q, card=("Иванов ИИ", "текст"))
+        self.assertEqual(out, "ok")
+        self.assertIn("текст", seen["messages"][-1]["content"])
+
+
 class TestPromptSilence(unittest.TestCase):
     def test_answerer_prompt_is_silent_about_machinery(self):
         from medassistant import prompts

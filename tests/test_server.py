@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import quote
 
 from fastapi.testclient import TestClient
@@ -50,6 +51,11 @@ def setUpModule():
     os.environ["CLINREC_DIR"] = str(TMP / "pdf")
     os.environ["DOCS_META"] = str(TMP / "docs_meta.json")
     os.environ["INDEX_DIR"] = str(index_dir)
+    cards_dir = TMP / "cards"
+    cards_dir.mkdir()
+    (cards_dir / "Тестов_ТТ.выписка.md").write_text(
+        "## Диагнозы\n- тест", encoding="utf-8")
+    os.environ["CARD_DIR"] = str(cards_dir)
     import medassistant.config
     import medassistant.server
     importlib.reload(medassistant.config)
@@ -58,7 +64,8 @@ def setUpModule():
 
 
 def tearDownModule():
-    for k in ("SESSIONS_DB", "AUDIT_LOG", "CLINREC_DIR", "DOCS_META", "INDEX_DIR"):
+    for k in ("SESSIONS_DB", "AUDIT_LOG", "CLINREC_DIR", "DOCS_META",
+              "INDEX_DIR", "CARD_DIR"):
         os.environ.pop(k, None)
     import medassistant.config
     import medassistant.server
@@ -95,8 +102,8 @@ class FakePipe:
         self.appendix_error = appendix_error
         self.calls = []
 
-    def stream_answer(self, question, history=None):
-        self.calls.append(("stream", question, list(history or [])))
+    def stream_answer(self, question, history=None, card=None):
+        self.calls.append(("stream", question, list(history or []), card))
         if isinstance(self.answer_events, Exception):
             raise self.answer_events
         yield from self.answer_events
@@ -138,12 +145,14 @@ class Base(unittest.TestCase):
     def tearDown(self):
         self._cm.__exit__(None, None, None)
 
-    def chat(self, question="Вопрос про ХСН?", session_id=None):
+    def chat(self, question="Вопрос про ХСН?", session_id=None, card=None):
         if session_id is None:
             session_id = self.client.post("/api/sessions",
                                           json={"title": ""}).json()["id"]
-        r = self.client.post("/api/chat", json={"session_id": session_id,
-                                                "question": question})
+        payload = {"session_id": session_id, "question": question}
+        if card is not None:
+            payload["card"] = card
+        r = self.client.post("/api/chat", json=payload)
         self.assertEqual(r.status_code, 200)
         return session_id, parse_sse(r.text)
 
@@ -357,6 +366,80 @@ class TestPdfTurn(Base):
         self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
         self.assertEqual(msgs[1]["kind"], "pdf")
         self.assertIsNone(msgs[1]["appendix"])
+
+
+CARD_FILE = "Тестов_ТТ.выписка.md"
+CARD_TEXT = "## Диагнозы\n- тест"
+
+
+class TestCards(Base):
+    def _post_card(self, card, question="Вопрос про ХСН?", session_id=None):
+        if session_id is None:
+            session_id = self.client.post("/api/sessions",
+                                          json={"title": ""}).json()["id"]
+        return session_id, self.client.post(
+            "/api/chat", json={"session_id": session_id,
+                               "question": question, "card": card})
+
+    def test_cards_listed(self):
+        body = self.client.get("/api/cards").json()
+        self.assertEqual([c["file"] for c in body], [CARD_FILE])
+        self.assertEqual(body[0]["name"], "Тестов ТТ")
+        self.assertGreater(body[0]["size"], 0)
+
+    def test_cards_missing_dir_empty(self):
+        with patch.object(srv.cards.config, "CARD_DIR", Path("nowhere")):
+            self.assertEqual(self.client.get("/api/cards").json(), [])
+
+    def test_card_reaches_answerer_question_stored_plain(self):
+        sid, _ = self.chat(card=CARD_FILE)
+        stream = [c for c in self.pipe.calls if c[0] == "stream"][0]
+        self.assertEqual(stream[1], "Вопрос про ХСН?")
+        self.assertEqual(stream[3], ("Тестов ТТ", CARD_TEXT))
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertEqual(msgs[0]["content"], "Вопрос про ХСН?")
+
+    def test_card_never_leaks_into_history(self):
+        sid, _ = self.chat(card=CARD_FILE)
+        self.chat("Второй вопрос?", session_id=sid)
+        second = [c for c in self.pipe.calls if c[0] == "stream"][1]
+        self.assertEqual([m["content"] for m in second[2]],
+                         ["Вопрос про ХСН?", "Ответ про ХСН."])
+        self.assertIsNone(second[3], "the next question carries no card")
+
+    def test_invalid_card_400_question_not_sent(self):
+        for bad in ("Нет_такого.выписка.md", "..\\evil.выписка.md",
+                    "../evil.выписка.md", "Тестов_ТТ.md", ".."):
+            sid, r = self._post_card(bad)
+            self.assertEqual(r.status_code, 400, bad)
+            self.assertEqual(self.pipe.calls, [], bad)
+
+    def test_oversize_card_400(self):
+        with patch.object(srv.cards.config, "CARD_MAX_CHARS", 5):
+            sid, r = self._post_card(CARD_FILE)
+        self.assertEqual(r.status_code, 400)
+
+    def test_pdf_turn_ignores_card_entirely(self):
+        # an INVALID card must not even be validated on the pdf path
+        sid, r = self._post_card("ghost.выписка.md", question="pdf ХСН")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([c[0] for c in self.pipe.calls], ["appendix"])
+
+    def test_card_used_audit_no_content(self):
+        sid, _ = self.chat(card=CARD_FILE)
+        sid, r = self._post_card("ghost.выписка.md", session_id=sid)
+        self.assertEqual(r.status_code, 400)
+        recs = [json.loads(l) for l in (TMP / "audit.jsonl")
+                .read_text(encoding="utf-8").splitlines()]
+        used = [r for r in recs if r["stage"] == "card_used"]
+        self.assertGreaterEqual(len(used), 1)  # the file is shared across tests
+        self.assertEqual(used[-1]["file"], CARD_FILE)
+        self.assertGreater(used[-1]["chars"], 0)
+        rejected = [r for r in recs if r["stage"] == "card_rejected"]
+        self.assertEqual(rejected[-1]["file"], "ghost.выписка.md")
+        # audit carries filename + char count only, never the card content
+        self.assertNotIn(CARD_TEXT.splitlines()[-1],
+                         json.dumps(recs, ensure_ascii=False))
 
 
 class TestStatic(Base):

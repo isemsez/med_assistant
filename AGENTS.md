@@ -33,12 +33,24 @@ pdf)» with the stripped payload, sources block below (the stored assistant
 caption row is merged away in the UI); stored with `messages.kind='pdf'`,
 which never enters the answerer history. Bare «pdf» without a disease is a 400.
 
+Patient card context (architecture.md §9, demo, owner decision 2026-10-06):
+hand-made `*.выписка.md` files in `data/patient_cards/` (2 fake examples
+ship); `GET /api/cards` lists them. The composer's «Карта пациента» picker
+attaches a card per question («С картой» checkbox, auto-checked on
+selection; a reload clears it — nothing stored: the stored user message
+stays the plain question, the card text goes only into the answerer prompt,
+audit logs filename+chars only). Validation (`cards.py`, shared with the
+CLI): traversal-safe filename, `.выписка.md` suffix, size ≤ `CARD_MAX_CHARS`
+(default 8000) → 400 before the question is sent; the file is re-read fresh
+on every request (the doctor may edit it mid-session). Pdf turns ignore the
+card entirely.
+
 ## Layout
 
 ```
 medassistant/            runtime package (config, llm, prompts, abbr, gindex,
                          pipeline, appendix, audit, store, health, stats,
-                         canary, regression, cli, server/)
+                         canary, regression, cards, cli, server/)
 scripts/                 one-time setup tools (strip_vision_gguf.py)
 models/                  Modelfiles (medgemma-cpu, medgemma-labeler, bge-cpu)
                          + .backup.modelfile of the pre-text-only definitions;
@@ -48,6 +60,9 @@ data/abbr2term.yaml      4,508 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
 data/index/              built embedding index (vectors.npy + meta.json with a
                          docs_meta freshness stamp)
+data/patient_cards/      hand-made patient cards (*.выписка.md, 2 fake
+                         examples) — per-question answerer context; nothing
+                         is stored (architecture.md §9)
 data/sessions.sqlite     persistent chat sessions
 data/backups/            startup backups of sessions.sqlite (newest 5 kept)
 logs/audit.jsonl         one record per pipeline stage per turn (size-rotated,
@@ -142,6 +157,9 @@ CLI (same pipeline, no GUI):
 python -m medassistant ask --question "Какие критерии диагностики ХСН?" --save
 python -m medassistant ask --question "pdf ХСН"            # manual pdf query
                                                              # (no answerer call)
+python -m medassistant ask --question "Что с одышкой?" `
+    --card Иванов_ИИ.выписка.md                            # patient card context
+                                                             # (filename or path)
 python -m medassistant ask --answer-file answers.jsonl # appendix machinery over
                                                       # pre-generated answers
 ```

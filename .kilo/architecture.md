@@ -286,8 +286,59 @@ hand from the same composer:
    attaches directly below it. Under the hood it is still stored as a
    user row + an assistant caption row (`kind='pdf'`); the UI merges the
    pair. Previous answers are never mutated.
-5. **Pdf turns never enter the answerer history** (`messages.kind='pdf'`,
-   excluded from the history window) — the command syntax must not leak
-   into medical answers.
-6. **CLI parity:** `python -m medassistant ask --question "pdf ХСН"` runs
-   the same manual path.
+ 5. **Pdf turns never enter the answerer history** (`messages.kind='pdf'`,
+    excluded from the history window) — the command syntax must not leak
+    into medical answers.
+ 6. **CLI parity:** `python -m medassistant ask --question "pdf ХСН"` runs
+    the same manual path.
+
+## 9. Patient card context (example-only)
+
+Demo feature (owner decision 2026-10-06): the physician can attach a
+pre-written patient-history summary («выписка из амбулаторной карты») so the
+answerer answers *this* question in the context of *this* patient.
+
+1. **Cards are hand-made text files** in `data/patient_cards/`
+   (`CARD_DIR`), named `{ФИО}.выписка.md` (Cyrillic OK); display name =
+   filename minus the `.выписка.md` suffix, underscores → spaces. There is
+   **no card-adding mechanism, no summarizer, and no original documents** —
+   the summary file IS the artifact (a textual extract is the only
+   "preencoding" a chat-completions decoder accepts; no vectors involved).
+   Two fake examples ship (`Иванов_ИИ`, `Петрова_АП`); `GET /api/cards`
+   lists them (a missing dir lists nothing).
+2. **Per-question opt-in, nothing persisted.** The UI has a «Карта
+   пациента» picker in the composer; a picked card shows a chip above the
+   composer and auto-checks «С картой» next to «Отправить». The selection
+   is in-memory page state — a reload clears it (accepted). **No schema
+   changes, no per-message markers**: the stored user message stays the
+   plain question; the card text exists only inside the answerer LLM call
+   and never enters history, SSE events, or the appendix inputs
+   (`iter_appendix` sees the plain question; labeler calls are unchanged).
+3. **Prompt injection is one place:** `Pipeline._messages` appends
+   `prompts.card_block(ФИО, text)` to the user message — a header line
+   («Выписка из амбулаторной карты пациента {ФИО} (приложена врачом;
+   учитывай её при ответе):»), the file text verbatim, and a closing
+   separator. The model never sees the filename; `SYSTEM_ANSWERER` is
+   untouched — the answerer stays a plain medical model, the card is
+   user-supplied context.
+4. **Validation (shared by server and CLI in `cards.py`), fresh read every
+   request:** the doctor may edit the file mid-session. `POST /api/chat`
+   gains optional `card` (filename): traversal-safe name inside `CARD_DIR`
+   (`Path(...).name` + parent check), mandatory `.выписка.md` suffix,
+   existence, size ≤ `CARD_MAX_CHARS` (default 8000 ≈ 2k tokens; the model
+   context is 131k, runtime `num_ctx` is a Modelfile concern that stays out
+   of scope). Any violation → HTTP 400 with a Russian message **before**
+   the question is sent.
+5. **Pdf turns ignore the card entirely** (§8): the frontend never sends
+   it for `pdf`/`пдф`-prefixed messages and the backend skips validation
+   on that path.
+6. **Audit:** `card_used` (file, chars) per question that used one,
+   `card_rejected` on validation failure — filename and length only, card
+   content is never logged (physician data stays out of the audit trail).
+7. **CLI parity:** `python -m medassistant ask --question "…" --card
+   Иванов_ИИ.выписка.md` (a filename in CARD_DIR or a direct path); the
+   stored message (`--save`) is the plain question.
+
+Out of scope (future): card upload/creation from the UI; original files
+(pdf/doc/db) with automatic summary regeneration; card state or per-message
+markers in sessions.sqlite; RAG over the card; OCR.

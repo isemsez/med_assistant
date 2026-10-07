@@ -21,6 +21,16 @@ SYSTEM_ANSWERER = """Ты — справочный медицинский асс
 4. Если вопрос выходит за пределы медицинских знаний или сформулирован
    неясно — скажи об этом прямо и уточни, что имелось в виду."""
 
+
+def card_block(display_name, text):
+    """Patient-card block appended after the question in the answerer's user
+    message (owner decision 2026-10-06, architecture.md §9). The header — not
+    the filename — is the only ФИО signal the model sees; the text goes in
+    verbatim, framed by the header and a closing separator."""
+    return (f"Выписка из амбулаторной карты пациента {display_name} "
+            "(приложена врачом; учитывай её при ответе):\n\n"
+            f"{text.strip()}\n\n(конец выписки)")
+
 SYSTEM_LABELER_EXTRACT = """Ты — автоматический маркировщик ответов медицинского ассистента.
 Ты НЕ отвечаешь на вопрос врача — ты только определяешь, о каких заболеваниях
 идёт речь в ответе.

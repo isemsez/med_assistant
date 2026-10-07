@@ -21,10 +21,18 @@
   </aside>
   <main id="chat">
     <div id="messages"></div>
-    <form id="composer">
-      <textarea id="question" rows="2" placeholder="Вопрос врача…" autofocus></textarea>
-      <button type="submit" id="send" class="btn-primary">Отправить</button>
-    </form>
+    <div id="composer-area">
+      <div id="card-bar" hidden>
+        <span class="chip">Карта: <span class="chip-name"></span><button type="button" id="card-clear" title="Убрать карту">×</button></span>
+      </div>
+      <div id="card-menu" hidden></div>
+      <form id="composer">
+        <button type="button" id="card-btn" class="btn-card" title="Приложить выписку из амбулаторной карты">Карта пациента</button>
+        <textarea id="question" rows="2" placeholder="Вопрос врача…" autofocus></textarea>
+        <button type="submit" id="send" class="btn-primary">Отправить</button>
+        <label id="card-attach" class="card-attach" hidden title="Приложить карту к этому вопросу"><input type="checkbox" id="card-use" checked> С картой</label>
+      </form>
+    </div>
   </main>
 </div>
 <script src="/util.js"></script>

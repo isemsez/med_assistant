@@ -11,6 +11,7 @@ DEFAULTS = {
     "CLINREC_DIR": "data/clinrec_minzdrav",
     "SESSIONS_DB": "data/sessions.sqlite",
     "AUDIT_LOG": "logs/audit.jsonl",
+    "CARD_DIR": "data/patient_cards",
 }
 
 
@@ -41,6 +42,7 @@ INDEX_DIR = _path("INDEX_DIR")
 CLINREC_DIR = _path("CLINREC_DIR")
 SESSIONS_DB = _path("SESSIONS_DB")
 AUDIT_LOG_PATH = _path("AUDIT_LOG")
+CARD_DIR = _path("CARD_DIR")
 
 HISTORY_WINDOW = int(os.environ.get("HISTORY_WINDOW", "6"))
 DISEASE_CAP = int(os.environ.get("DISEASE_CAP", "3"))
@@ -58,6 +60,10 @@ SESSIONS_BACKUP_KEEP = int(os.environ.get("SESSIONS_BACKUP_KEEP", "5"))
 AUTO_PICK = os.environ.get("AUTO_PICK", "1") not in {"0", "false", "no"}
 AUTO_PICK_MIN = float(os.environ.get("AUTO_PICK_MIN", "0.80"))
 AUTO_PICK_GAP = float(os.environ.get("AUTO_PICK_GAP", "0.05"))
+
+# Patient cards (owner decision 2026-10-06, architecture.md §9): hand-made
+# *.выписка.md files, per-question prompt context, nothing stored.
+CARD_MAX_CHARS = int(os.environ.get("CARD_MAX_CHARS", "8000"))
 
 ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "2048"))
 LABELER_EXTRACT_MAX_TOKENS = int(os.environ.get("LABELER_EXTRACT_MAX_TOKENS", "200"))

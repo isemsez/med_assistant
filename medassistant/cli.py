@@ -3,6 +3,7 @@
 Commands:
   build-index                  embed all guideline names -> data/index/
   ask --question "…"           live: stream answer, then run the appendix machinery
+                               (--card FILE appends a patient card to the prompt)
   ask --answer-file FILE       appendix machinery over pre-generated answers
                                (JSONL rows: {question, raw_answer[, diseases[, picks]]};
                                `diseases` stubs labeler 1, `picks` stubs labeler 2)
@@ -19,7 +20,7 @@ import time
 from pathlib import Path
 
 from . import audit as audit_mod
-from . import config, gindex, llm
+from . import cards, config, gindex, llm
 from .pipeline import split_pdf_prefix
 
 
@@ -74,6 +75,13 @@ def _run_row(pipe, row, session_id=None):
     _print_result(result)
 
 
+def _load_card_spec(spec):
+    """`--card` accepts a filename inside CARD_DIR or a direct path; both go
+    through the same validation (architecture.md §9)."""
+    p = Path(spec)
+    return (cards.load_card_path(p) if p.exists() else cards.load_card(spec))
+
+
 def cmd_ask(args):
     aud = audit_mod.Audit(config.AUDIT_LOG_PATH)
     pipe = _load_pipeline(aud)
@@ -104,7 +112,10 @@ def cmd_ask(args):
     if pdf_payload is not None:
         # manual pdf turn (owner decision 2026-10-04): labeler 1 in direct
         # mode over the payload, no answerer call; input-only — no context
-        # from the earlier conversation
+        # from the earlier conversation. The card never applies here.
+        if args.card:
+            print("[карта] для pdf-запроса карта пациента не используется",
+                  file=sys.stderr)
         if store:
             store.add_message(session_id, "user", args.question, kind="pdf")
         aud.log("pdf_query", session_id=session_id, payload=pdf_payload)
@@ -125,16 +136,27 @@ def cmd_ask(args):
             store.touch(session_id)
         return
 
+    card = None
+    if args.card:
+        try:
+            card = _load_card_spec(args.card)
+        except cards.CardError as e:
+            print(f"[карта] {e}", file=sys.stderr)
+            raise SystemExit(2)
+
     history = store.history_window(session_id, config.HISTORY_WINDOW) if store else []
     if store:
         store.add_message(session_id, "user", args.question)
     aud.log("question", session_id=session_id, question=args.question)
+    if card is not None:
+        aud.log("card_used", session_id=session_id, file=args.card,
+                chars=len(card[1]))
 
     parts = []
     t_answer = time.monotonic()
     try:
         shown_thinking = False
-        for event in pipe.stream_answer(args.question, history):
+        for event in pipe.stream_answer(args.question, history, card=card):
             if event["type"] == "reasoning":
                 if not shown_thinking:
                     print("(модель размышляет — скрыто, пишется в stderr)",
@@ -207,6 +229,9 @@ def main(argv=None):
     a = sub.add_parser("ask", help="ask a question / re-run appendix on answers")
     a.add_argument("--question")
     a.add_argument("--answer-file")
+    a.add_argument("--card", default=None,
+                   help="patient card (filename in data/patient_cards or a path), "
+                        "appended to the answerer prompt for this question")
     a.add_argument("--session", type=int, default=None)
     a.add_argument("--save", action="store_true",
                    help="store the exchange in the sessions DB")
