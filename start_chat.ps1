@@ -295,7 +295,7 @@ try {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
             Quit 1
         }
-        "main Ollama :11434 started"
+        "main Ollama    :11434 started"
     }
 
     # 2) labeler instance, iGPU/Vulkan, :11435. The web app does NOT read these
