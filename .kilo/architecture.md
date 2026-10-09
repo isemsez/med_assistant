@@ -341,10 +341,12 @@ answerer answers *this* question in the context of *this* patient.
    request:** the doctor may edit the file mid-session. `POST /api/chat`
    gains optional `card` (filename): traversal-safe name inside `CARD_DIR`
    (`Path(...).name` + parent check), mandatory `.выписка.md` suffix,
-   existence, size ≤ `CARD_MAX_CHARS` (default 8000 ≈ 2k tokens; the model
-   context is 131k, runtime `num_ctx` is a Modelfile concern that stays out
-   of scope). Any violation → HTTP 400 with a Russian message **before**
-   the question is sent.
+    existence, size ≤ `CARD_MAX_CHARS` (default 8000 ≈ 2k tokens; the model
+    context is 131k, runtime `num_ctx` is 12288 via the Modelfile — 3x the
+    Ollama 4096 default, which silently truncated the prompt head (system
+    persona + history) on card turns; owner decision 2026-10-09). Any
+    violation → HTTP 400 with a Russian message **before** the question
+    is sent.
 5. **Pdf turns ignore the card entirely** (§8): the frontend never sends
    it for `pdf`/`пдф`-prefixed messages and the backend skips validation
    on that path.

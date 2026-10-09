@@ -95,6 +95,9 @@ Models (owner decision 2026-10-06: text-only medgemma + CPU-pinned bge after
 the iGPU `ErrorOutOfDeviceMemory` crash loop; base from the gp-eval runbook):
 - main instance (`:11434`, auto-started): `medgemma-cpu` = medgemma1.5:4b
   **text-only** (vision projector stripped) with `PARAMETER num_gpu 0`
+  and `PARAMETER num_ctx 12288` (3x the Ollama 4096 default: patient card +
+  history + the 2048-token thinking/answer budget overflowed 4096 and
+  silently truncated the prompt head; owner decision 2026-10-09)
   (answerer, thinking on) **and** `bge-cpu` = bge-m3 with `PARAMETER num_gpu 0`
   (embeddings; stays off the iGPU so it never competes with the labeler for
   the Vulkan allocation pool — index vectors unchanged, same weights)

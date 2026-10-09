@@ -31,3 +31,8 @@ TEMPLATE """{{- $lastUserIdx := -1 -}}
 PARAMETER stop <end_of_turn>
 PARAMETER temperature 0
 PARAMETER num_gpu 0
+# 3x the Ollama default (4096): patient card (up to ~2750 tok) + history +
+# the 2048-token thinking/answer budget overflowed 4096 and silently
+# truncated the prompt head (system persona + history) — owner decision
+# 2026-10-09
+PARAMETER num_ctx 12288
