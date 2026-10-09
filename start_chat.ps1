@@ -29,9 +29,13 @@
 # (logs/ollama-<inst>-<stamp>.*.log, logs/web-<stamp>.*.log) and prunes old
 # boots, keeping the 5 latest per component.
 # Stopping is a forced Stop-Process (no graceful shutdown) - acceptable for a
-# dev tool, the SQLite session store is crash-safe. Only python/uvicorn and
-# ollama processes are ever killed; anything else on a managed port is
-# reported and left alone.
+# dev tool, the SQLite session store is crash-safe. A stop kills the whole
+# process TREE rooted at each managed listener: ollama.exe serve runs every
+# loaded model in a child llama-server.exe (GBs of RAM), and a parent-only
+# kill orphans the runners. Descendants are only killed when their executable
+# lives under the component's install dir (Ollama dir / .venv), and
+# orphaned llama-server.exe runners (dead parent) are swept on every start
+# and stop. Anything else on a managed port is reported and left alone.
 # Requires (once, see AGENTS.md): setx OLLAMA_IGPU_ENABLE 1,
 # setx OLLAMA_MAX_LOADED_MODELS 2, models pulled, .venv built.
 param([switch]$Foreground, [switch]$SkipWeb, [switch]$Canary, [switch]$SkipCanary)
@@ -90,13 +94,27 @@ function Test-PortOpen([int]$port) {
     try { return $c.ConnectAsync("127.0.0.1", $port).Wait(500) -and $c.Connected }
     finally { $c.Dispose() }
 }
-function Wait-PortOpen([int]$port, [int]$timeoutSec = 60) {
+function Wait-PortOpen([int]$port, [int]$timeoutSec = 60, [switch]$NoQuit) {
+    # returns $true once the port binds; on timeout warns and exits through
+    # Quit unless -NoQuit (the caller then kills the process it started
+    # instead of orphaning it)
     $deadline = (Get-Date).AddSeconds($timeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if (Test-PortOpen $port) { return }
+        if (Test-PortOpen $port) { return $true }
         Start-Sleep -Milliseconds 500
     }
-    Write-Warning "port $port did not open within ${timeoutSec}s"; Quit 1
+    Write-Warning "port $port did not open within ${timeoutSec}s"
+    if ($NoQuit) { return $false }
+    Quit 1
+}
+
+function Wait-PortClosed([int]$port, [int]$timeoutSec = 8) {
+    $deadline = (Get-Date).AddSeconds($timeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-PortOpen $port)) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
 }
 
 function Request-CanaryRun([int]$seconds = 4) {
@@ -157,10 +175,11 @@ function Start-OllamaHidden([string]$inst) {
     # -WindowStyle Minimized and pops a foreground window, so redirect
     # both streams to files instead (separate files: Start-Process
     # cannot share one for stdout+stderr)
-    Start-Process $ollamaExe -ArgumentList "serve" -WindowStyle Hidden `
+    $proc = Start-Process $ollamaExe -ArgumentList "serve" -WindowStyle Hidden `
         -RedirectStandardOutput "$root\logs\ollama-$inst-$bootStamp.out.log" `
-        -RedirectStandardError "$root\logs\ollama-$inst-$bootStamp.err.log"
+        -RedirectStandardError "$root\logs\ollama-$inst-$bootStamp.err.log" -PassThru
     Remove-OldBootLogs "ollama-$inst"
+    return $proc
 }
 
 function Remove-OldBootLogs([string]$prefix, [int]$keep = 5) {
@@ -175,7 +194,40 @@ function Remove-OldBootLogs([string]$prefix, [int]$keep = 5) {
     }
 }
 
-function Stop-ByPort([int]$port, [string]$procPattern, [string]$label) {
+function Stop-Children([int]$procId, [string]$exeDir) {
+    # kill every descendant of $procId, deepest first. ollama.exe serve runs
+    # each loaded model in a child llama-server.exe process; killing only the
+    # listener orphans the runners with their GBs of model RAM. A descendant
+    # is only killed when its executable lives under $exeDir, so a mixed
+    # tree can never harm unrelated processes.
+    $kids = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $procId" -ErrorAction SilentlyContinue)
+    foreach ($k in $kids) {
+        Stop-Children ([int]$k.ProcessId) $exeDir
+        if ($k.ExecutablePath -and
+            $k.ExecutablePath.StartsWith($exeDir, [StringComparison]::OrdinalIgnoreCase)) {
+            Stop-Process -Id $k.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Stop-OrphanRunners([string]$ollamaDir) {
+    # sweep llama-server.exe model runners whose parent ollama.exe is already
+    # dead - garbage left behind by earlier stops or crashes; matched by
+    # executable path so nothing unrelated is ever touched
+    $runners = @(Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and
+            $_.ExecutablePath.StartsWith($ollamaDir, [StringComparison]::OrdinalIgnoreCase) })
+    foreach ($r in $runners) {
+        $parentAlive = ($r.ParentProcessId -gt 0) -and
+            [bool](Get-Process -Id $r.ParentProcessId -ErrorAction SilentlyContinue)
+        if (-not $parentAlive) {
+            Stop-Process -Id $r.ProcessId -Force -ErrorAction SilentlyContinue
+            "  swept orphaned runner pid $($r.ProcessId) (no parent ollama)"
+        }
+    }
+}
+
+function Stop-ByPort([int]$port, [string]$procPattern, [string]$label, [string]$exeDir) {
     $conns = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
     $procIds = @($conns | Select-Object -ExpandProperty OwningProcess -Unique)
     if ($procIds.Count -eq 0) { "  ${label} :${port} already down"; return }
@@ -184,8 +236,9 @@ function Stop-ByPort([int]$port, [string]$procPattern, [string]$label) {
         $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
         if ($null -eq $p) { continue }
         if ($p.ProcessName -like $procPattern) {
+            Stop-Children $procId $exeDir
             Stop-Process -Id $procId -Force
-            "  stopped $($p.ProcessName) pid $procId (${label}, :${port})"
+            "  stopped $($p.ProcessName) pid $procId + children (${label}, :${port})"
         }
         else {
             Write-Warning "  :${port} is held by '$($p.ProcessName)' pid $procId (not ${procPattern}) - left alone"
@@ -196,11 +249,14 @@ function Stop-ByPort([int]$port, [string]$procPattern, [string]$label) {
 # --- main flow (try/catch: uncaught terminating errors must route through
 # --- Quit, or a bare-run window would vanish instantly on them) -------------
 try {
-    # Managed components (web excluded by -SkipWeb in both directions).
+    # Managed components (web excluded by -SkipWeb in both directions). Dir =
+    # install dir used to scope descendant kills to this stack's binaries.
+    $ollamaDir = Split-Path $ollamaExe
+    $venvDir = "$root\.venv"
     $components = @(
-        @{ Port = $webPort; Label = "web app";        Proc = "python*" }
-        @{ Port = 11434;   Label = "main Ollama";     Proc = "ollama*" }
-        @{ Port = 11435;   Label = "labeler Ollama";  Proc = "ollama*" }
+        @{ Port = $webPort; Label = "web app";        Proc = "python*"; Dir = $venvDir }
+        @{ Port = 11434;   Label = "main Ollama";     Proc = "ollama*"; Dir = $ollamaDir }
+        @{ Port = 11435;   Label = "labeler Ollama";  Proc = "ollama*"; Dir = $ollamaDir }
     )
     if ($SkipWeb) { $components = @($components | Where-Object { $_.Port -ne $webPort }) }
 
@@ -211,7 +267,13 @@ try {
             Write-Warning "-Foreground applies only to starting; stopping instead."
         }
         "Stopping assistant (re-run to start again):"
-        foreach ($c in $components) { Stop-ByPort $c.Port $c.Proc $c.Label }
+        foreach ($c in $components) { Stop-ByPort $c.Port $c.Proc $c.Label $c.Dir }
+        Stop-OrphanRunners $ollamaDir
+        foreach ($c in $components) {
+            if (-not (Wait-PortClosed $c.Port)) {
+                Write-Warning "  :$($c.Port) ($($c.Label)) still open after stopping"
+            }
+        }
         Quit 0 2
     }
 
@@ -219,13 +281,21 @@ try {
     "Starting assistant:"
     Write-Host ""
 
+    # sweep runners orphaned by earlier stops/crashes before booting
+    Stop-OrphanRunners $ollamaDir
+
     # 1) main instance (answerer medgemma-cpu + bge-m3), default host :11434.
     #    MUST run before the labeler env vars are set - otherwise it would
     #    inherit OLLAMA_HOST=:11435.
     if (Test-PortOpen 11434) { "main Ollama :11434 already up" }
     else {
-        Start-OllamaHidden "main"
-        Wait-PortOpen 11434; "main Ollama :11434 started"
+        $proc = Start-OllamaHidden "main"
+        if (-not (Wait-PortOpen 11434 -NoQuit)) {
+            Stop-Children $proc.Id $ollamaDir
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Quit 1
+        }
+        "main Ollama :11434 started"
     }
 
     # 2) labeler instance, iGPU/Vulkan, :11435. The web app does NOT read these
@@ -236,8 +306,13 @@ try {
         $env:OLLAMA_HOST = "127.0.0.1:11435"
         $env:OLLAMA_VULKAN = "true"
         $env:OLLAMA_IGPU_ENABLE = "1"
-        Start-OllamaHidden "labeler"
-        Wait-PortOpen 11435; "labeler Ollama :11435 started"
+        $proc = Start-OllamaHidden "labeler"
+        if (-not (Wait-PortOpen 11435 -NoQuit)) {
+            Stop-Children $proc.Id $ollamaDir
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Quit 1
+        }
+        "labeler Ollama :11435 started"
     }
 
     if (-not (Test-Path $py)) { Write-Warning ".venv not found - see AGENTS.md Setup"; Quit 1 }
@@ -278,13 +353,17 @@ try {
         finally { Pop-Location }
     }
     else {
-        Start-Process $py `
+        $proc = Start-Process $py `
             -ArgumentList "-m","uvicorn","medassistant.server:app","--host","127.0.0.1","--port",$webPort `
             -WorkingDirectory $root -WindowStyle Hidden `
             -RedirectStandardOutput "$root\logs\web-$bootStamp.out.log" `
-            -RedirectStandardError "$root\logs\web-$bootStamp.err.log"
+            -RedirectStandardError "$root\logs\web-$bootStamp.err.log" -PassThru
         Remove-OldBootLogs "web"
-        Wait-PortOpen $webPort
+        if (-not (Wait-PortOpen $webPort -NoQuit)) {
+            Stop-Children $proc.Id $venvDir
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Quit 1
+        }
         Start-Process "http://127.0.0.1:$webPort"
         "web app started -> http://127.0.0.1:$webPort (opened in the default browser;"
         "logs: logs\web-$bootStamp.out.log / .err.log)"
