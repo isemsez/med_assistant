@@ -6,6 +6,10 @@ one in the UI; its text is appended to the answerer's user message for that
 question only. Nothing is stored — the stored user message stays the plain
 question, and the card text appears only in the LLM call. Shared by the
 server and the CLI so both validate identically.
+
+Sibling ``*.амбулаторная_карта.md`` files are source charts — provenance for
+the extracts, never attachable on this (4B) tier — and are ignored here by
+design (the glob and the suffix check skip them).
 """
 
 from pathlib import Path

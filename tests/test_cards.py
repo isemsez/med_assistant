@@ -91,22 +91,40 @@ class TestLoadCard(unittest.TestCase):
             cards.load_card_path(self.dir / "нет.md")
 
 
-SHIPPED = ("Иванов_ИИ.выписка.md", "Петрова_АП.выписка.md")
+SOURCE_SUFFIX = ".амбулаторная_карта.md"
 SECTIONS = ("## Диагнозы", "## Препараты (МНН)", "## Аллергии",
             "## Ключевые показатели", "## Жалобы")
 
 
 class TestShippedExamples(unittest.TestCase):
-    def test_exist_within_limit_and_matched_by_glob(self):
-        listed = {c["file"] for c in cards.list_cards(config.CARD_DIR)}
-        for f in SHIPPED:
-            self.assertIn(f, listed)
-            text = (config.CARD_DIR / f).read_text(encoding="utf-8")
-            self.assertGreater(len(text.strip()), 0)
-            self.assertLessEqual(len(text), config.CARD_MAX_CHARS)
-            self.assertLessEqual(len(text), 4000, "demo cards stay compact")
+    """The shipped demo set is enumerated dynamically — no hardcoded names
+    to go stale when the demo patients are regenerated (карта + выписка
+    pairs, generator prompt in data/patient_cards/)."""
+
+    def test_cards_ship_within_limit_with_sections_and_source_chart(self):
+        listed = cards.list_cards(config.CARD_DIR)
+        self.assertGreaterEqual(
+            len(listed), 2, "the demo card set must not be empty")
+        for c in listed:
+            text = (config.CARD_DIR / c["file"]).read_text(encoding="utf-8")
+            self.assertGreater(len(text.strip()), 0, c["file"])
+            self.assertLessEqual(
+                len(text), config.CARD_MAX_CHARS, c["file"])
             for section in SECTIONS:
-                self.assertIn(section, text)
+                self.assertIn(section, text, c["file"])
+            # pair completeness: every выписка ships with its source chart
+            source = c["file"][: -len(cards.SUFFIX)] + SOURCE_SUFFIX
+            self.assertTrue((config.CARD_DIR / source).is_file(),
+                            f"{c['file']} has no sibling {source}")
+
+    def test_source_charts_are_not_attachable(self):
+        listed = {c["file"] for c in cards.list_cards(config.CARD_DIR)}
+        charts = list(config.CARD_DIR.glob(f"*{SOURCE_SUFFIX}"))
+        self.assertGreaterEqual(len(charts), 2)
+        for chart in charts:
+            self.assertNotIn(chart.name, listed)
+            with self.assertRaises(cards.CardError):
+                cards.load_card(chart.name)
 
 
 class TestCardBlock(unittest.TestCase):

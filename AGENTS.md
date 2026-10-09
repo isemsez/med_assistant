@@ -34,8 +34,11 @@ caption row is merged away in the UI); stored with `messages.kind='pdf'`,
 which never enters the answerer history. Bare «pdf» without a disease is a 400.
 
 Patient card context (architecture.md §9, demo, owner decision 2026-10-06):
-hand-made `*.выписка.md` files in `data/patient_cards/` (2 fake examples
-ship); `GET /api/cards` lists them. The composer's «Карта пациента» is one
+hand-made two-file demo pairs in `data/patient_cards/` — the attachable
+`{ФИО}.выписка.md` extract plus its non-attachable source chart
+`{ФИО}.амбулаторная_карта.md` (5 fake patients ship; the generator prompt
+`data/patient_cards/PROMPT_browser_agent_EMK.md` describes the pair
+convention); `GET /api/cards` lists the extracts only. The composer's «Карта пациента» is one
 toggle button (owner decision 2026-10-07): OFF — click opens the picker;
 ON — shows the patient name, click detaches it, and every non-pdf question
 carries the card while ON. The visible state is per chat session —
@@ -65,9 +68,12 @@ data/abbr2term.yaml      4,508 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
 data/index/              built embedding index (vectors.npy + meta.json with a
                          docs_meta freshness stamp)
-data/patient_cards/      hand-made patient cards (*.выписка.md, 2 fake
-                         examples) — per-question answerer context; nothing
-                         is stored (architecture.md §9)
+data/patient_cards/      hand-made demo patient pairs: attachable
+                         *.выписка.md + non-attachable source chart
+                         *.амбулаторная_карта.md (5 fake patients,
+                         generator prompt PROMPT_browser_agent_EMK.md) —
+                         per-question answerer context; nothing is stored
+                         (architecture.md §9)
 data/sessions.sqlite     persistent chat sessions
 data/backups/            startup backups of sessions.sqlite (newest 5 kept)
 logs/audit.jsonl         one record per pipeline stage per turn (size-rotated,

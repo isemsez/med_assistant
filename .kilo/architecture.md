@@ -299,13 +299,20 @@ pre-written patient-history summary («выписка из амбулаторн�
 answerer answers *this* question in the context of *this* patient.
 
 1. **Cards are hand-made text files** in `data/patient_cards/`
-   (`CARD_DIR`), named `{ФИО}.выписка.md` (Cyrillic OK); display name =
-   filename minus the `.выписка.md` suffix, underscores → spaces. There is
-   **no card-adding mechanism, no summarizer, and no original documents** —
-   the summary file IS the artifact (a textual extract is the only
-   "preencoding" a chat-completions decoder accepts; no vectors involved).
-   Two fake examples ship (`Иванов_ИИ`, `Петрова_АП`); `GET /api/cards`
-   lists them (a missing dir lists nothing).
+   (`CARD_DIR`), as two-file demo pairs per patient (owner decision
+   2026-10-09): the attachable card `{ФИО}.выписка.md` (Cyrillic OK;
+   display name = filename minus the `.выписка.md` suffix, underscores →
+   spaces) plus its source chart `{ФИО}.амбулаторная_карта.md` — the
+   "original" every extract fact must be derivable from, never attachable
+   on the 4B tier: the summary file IS the artifact (a textual extract is
+   the only "preencoding" a chat-completions decoder accepts; no vectors
+   involved; full-chart attachment is deferred to the 27B tier — see the
+   out-of-scope list). Five fake pairs ship (Волков_ДС, Иванова_МП,
+   Петрова_АС, Смирнова_ЕВ, Соколов_АВ); the generator prompt
+   `data/patient_cards/PROMPT_browser_agent_EMK.md` describes the pair
+   convention. `GET /api/cards` lists the extracts only (a missing dir
+   lists nothing). There is still **no card-adding mechanism and no
+   summarizer**.
 2. **Per-question opt-in, invisible session pin.** The composer has ONE
    toggle button (owner decision 2026-10-07, superseding the earlier
    chip + checkbox and +/× sub-button variants): OFF — «Карта пациента»,
@@ -348,6 +355,8 @@ answerer answers *this* question in the context of *this* patient.
    Иванов_ИИ.выписка.md` (a filename in CARD_DIR or a direct path); the
    stored message (`--save`) is the plain question.
 
-Out of scope (future): card upload/creation from the UI; original files
+Out of scope (future): attaching the full амбулаторная карта
+(`*.амбулаторная_карта.md` as the card — planned for the 27B tier, owner
+decision 2026-10-09); card upload/creation from the UI; original files
 (pdf/doc/db) with automatic summary regeneration; per-message card markers
 in sessions.sqlite; RAG over the card; OCR.
