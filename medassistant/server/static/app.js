@@ -3,6 +3,11 @@
 const $ = (sel) => document.querySelector(sel);
 const state = { sessions: [], current: null, busy: false, streamActive: false };
 let loadPromise = Promise.resolve();
+// The in-flight turn: {sid, wrap, question, pdf, done}. loadSession wipes
+// #messages on every switch, so the live nodes must be re-attachable —
+// while it streams, the store holds at most the question (the assistant
+// row with its reasoning lands only when the answer completes).
+let activeStream = null;
 
 // esc() lives in util.js, loaded before this script.
 
@@ -172,6 +177,26 @@ async function loadSession(id) {
     await loadSessionPin(id); // …but the session's pin comes back invisibly
     const r = await api(`/api/sessions/${id}/messages`);
     const msgs = await r.json();
+    // An in-flight turn for THIS session renders from its live wrapper, not
+    // from the store: skip the stored rows the wrapper already shows and
+    // re-attach it below, so switching away and back keeps the stream on
+    // screen (the assistant row lands in the store only when the answer
+    // completes — until then the store alone shows just the question).
+    const st = activeStream && activeStream.sid === id ? activeStream : null;
+    if (st) {
+      const last = msgs[msgs.length - 1];
+      if (last && last.role === "user" && last.content === st.question) {
+        msgs.pop(); // the question row — the wrapper shows it live
+      } else if (last && last.role === "assistant") {
+        const prev = msgs[msgs.length - 2];
+        // pdf turns store the caption row at turn start; chat turns store
+        // the answer row at done — either way it follows the question row
+        if (prev && prev.role === "user" && prev.content === st.question
+            && (st.pdf ? last.kind === "pdf" : st.done)) {
+          msgs.length -= 2;
+        }
+      }
+    }
     for (let i = 0; i < msgs.length; i++) {
       const m = msgs[i];
       if (m.role === "user" && m.kind === "pdf") {
@@ -196,6 +221,7 @@ async function loadSession(id) {
         if (m.appendix) renderAppendix(m.appendix, node);
       }
     }
+    if (st) $("#messages").appendChild(st.wrap); // resume the live turn in place
     await refreshSessions();
     scrollDown();
   })();
@@ -223,6 +249,16 @@ async function rewind(node) {
 
 function scrollDown() {
   $("#messages").scrollTop = $("#messages").scrollHeight;
+}
+
+// Auto-follow the stream only while the view is already at (or near) the
+// bottom: scrolling up to read must not be yanked back by the next token.
+// The threshold (~80px) covers the couple of lines appended between two
+// stream events, so a followed stream stays followed; follow resumes when
+// the physician scrolls back down.
+function nearBottom() {
+  const m = $("#messages");
+  return m.scrollHeight - m.scrollTop - m.clientHeight < 80;
 }
 
 // ---------- patient card (per-question prompt context; never persisted) ----------
@@ -347,14 +383,28 @@ async function send(question) {
   state.busy = true;
   state.streamActive = true; // covers the whole SSE stream, appendix included
   $("#send").disabled = true;
+  // The whole live turn — question bubble, thinking, answer, status lines,
+  // candidate cards, sources — lives in ONE wrapper. A session switch wipes
+  // #messages and detaches the wrapper whole; coming back re-attaches it and
+  // the stream stays visible instead of silently writing into orphaned nodes
+  // (and stage lines leaking into the wrong session's view via insertAfter).
+  const wrap = document.createElement("div");
   const userNode = msgNode("user", question);
   const asst = msgNode("assistant", "");
+  wrap.append(userNode, asst);
+  $("#messages").appendChild(wrap);
+  activeStream = { sid: state.current, wrap, question, pdf: false, done: false };
   const body = asst.querySelector(".body");
   body.style.display = "none"; // the answer block appears only when the answer starts
   let thinking = null;
   let statusLine = null;
   let answer = "";
   let anchor = asst; // pdf turns retarget status/sources/error nodes to the user bubble
+  // only scroll the chat while our turn is actually on screen — a background
+  // stream in another session must not yank the physician's current view —
+  // and only while the view is at the bottom (nearBottom): scrolling up
+  // pauses the follow until the physician returns to the bottom
+  const autoScroll = () => { if (wrap.isConnected && nearBottom()) scrollDown(); };
   scrollDown();
 
   let sid = state.current;
@@ -367,6 +417,7 @@ async function send(question) {
       sid = (await r.json()).id;
       state.current = sid;
     }
+    activeStream.sid = sid;
     // the card applies while a patient is selected and the message is not
     // a pdf turn (belt and suspenders — the server also ignores that path)
     const useCard = cardState.card && pdfPayload(question) === "";
@@ -383,7 +434,7 @@ async function send(question) {
     let buf = "", cursorOn = true, answerStarted = false;
     const render = () => {
       body.innerHTML = fmt(answer) + (cursorOn ? `<span class="cursor">▍</span>` : "");
-      scrollDown();
+      autoScroll();
     };
     const status = (text) => {
       if (!statusLine) {
@@ -392,7 +443,7 @@ async function send(question) {
         insertAfter(statusLine, anchor);
       }
       statusLine.textContent = text;
-      scrollDown();
+      autoScroll();
     };
     const clearStatus = () => {
       if (statusLine) { statusLine.remove(); statusLine = null; }
@@ -403,19 +454,19 @@ async function send(question) {
     let candBlocks = [];
     let candAnchor = asst;
     const showCandidates = (disease, cards) => {
-      const wrap = document.createElement("div");
-      wrap.className = "sources provisional";
+      const candWrap = document.createElement("div");
+      candWrap.className = "sources provisional";
       const items = (cards || []).map((c) => `<li>${
         c.url
           ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">«${esc(c.name)}» (${esc(c.code_version)})</a>`
           : `«${esc(c.name)}» (${esc(c.code_version)})`
       }</li>`).join("");
-      wrap.innerHTML = `<div class="caption">Кандидаты pdf — фильтрую по «${esc(disease)}»</div>
+      candWrap.innerHTML = `<div class="caption">Кандидаты pdf — фильтрую по «${esc(disease)}»</div>
         <ul>${items}</ul>`;
-      insertAfter(wrap, candAnchor);
-      candAnchor = wrap;
-      candBlocks.push(wrap);
-      scrollDown();
+      insertAfter(candWrap, candAnchor);
+      candAnchor = candWrap;
+      candBlocks.push(candWrap);
+      autoScroll();
     };
     const clearCandidates = () => {
       candBlocks.forEach((b) => b.remove());
@@ -441,7 +492,7 @@ async function send(question) {
           if (!thinking) thinking = makeThinkingBlock(asst);
           thinking.body.textContent += data.t;
           thinking.open();
-          scrollDown();
+          autoScroll();
         } else if (ev.event === "reasoning_reset") {
           // degenerate thinking loop aborted upstream; the retry restarts
           // the reasoning from scratch — drop the looped garbage
@@ -449,6 +500,7 @@ async function send(question) {
         } else if (ev.event === "kind" && data.turn === "pdf") {
           // manual pdf turn renders as ONE row: the question bubble is
           // retitled and re-bodied; the assistant bubble never appears
+          activeStream.pdf = true;
           const who = userNode.querySelector(".who");
           if (who) who.textContent = "Врач (подбор pdf)";
           userNode.querySelector(".body").innerHTML = fmt(`«${data.payload}»`);
@@ -473,20 +525,23 @@ async function send(question) {
           $("#send").disabled = false;
           cursorOn = false;
           render();
+          // ids are set even while detached: they must survive a session
+          // switch so rewind keeps working on the re-attached turn
           if (data.user_message_id != null) userNode.dataset.mid = data.user_message_id;
-          if (data.message_id != null && asst.isConnected) asst.dataset.mid = data.message_id;
+          if (data.message_id != null) asst.dataset.mid = data.message_id;
+          activeStream.done = true;
         } else if (ev.event === "appendix") {
           clearStatus();
           clearCandidates(); // provisional list -> final filtered sources
           renderAppendix(data, anchor);
-          scrollDown();
+          autoScroll();
         } else if (ev.event === "error") {
           clearStatus();
           clearCandidates();
           cursorOn = false;
           render();
           noteNode(data.text, true, anchor);
-          scrollDown();
+          autoScroll();
         }
       }
     }
@@ -502,8 +557,9 @@ async function send(question) {
     state.busy = false;
     state.streamActive = false;
     $("#send").disabled = false;
+    activeStream = null; // the turn is fully stored now — normal render takes over
     await refreshSessions();
-    scrollDown();
+    autoScroll();
   }
 }
 
