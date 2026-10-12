@@ -87,9 +87,19 @@ final answer = raw answer + appendix block (local PDF links only)
 ### [1] Answerer
 
 - Prompt = physician assistant persona + rules: answer in Russian in a
-  clinical style (профессиональный медицинский тон); МНН only;   **no treatment content unless explicitly asked**; no citing or summarizing
-  specific normative documents/orders/guidelines — if asked about them
-  directly, say you have no access to them (never invent them).
+  clinical style (профессиональный медицинский тон); МНН only; **no treatment
+  content unless explicitly asked**; no citing or summarizing specific
+  normative documents/orders/guidelines — if asked about them directly, say
+  you have no access to them (never invent them).
+  Do NOT add an "answer in МНН when the physician names a trade name"
+  clause: at 4B it becomes a format target the model satisfies by
+  fabricating a plausible-looking INN («Сорбифер Дурулес» → «железо(II)
+  глюконат», 2026-10-11). Anti-fabrication rules don't fix it either:
+  «do not invent figures/substance names» wording (tested 2026-10-11..12)
+  still yielded fabricated INNs («Феррум гликонат», «Метилурацилат») and
+  was reverted. The plain МНН-only rule answers such questions correctly
+  in most runs but still fabricates occasionally (2026-10-11) — residual
+  4B flakiness, documented lever: 27B tier via `CANDIDATE_*`.
 - No footnote rule, no self-labelling, no few-shot examples that could leak.
   The prompt stays **silent** about footnotes — no negative instruction
   either: the model has no such instinct to suppress, and naming the behavior
@@ -135,7 +145,7 @@ final answer = raw answer + appendix block (local PDF links only)
   **All 757 guidelines are indexed — no age/GP filter** (the assistant serves
   all physicians, pediatrics included).
 - **Query:** the extracted name **plus its abbreviation-expansion variants** —
-  uppercase tokens looked up in `abbr2term` (4,506 Cyrillic medical
+   uppercase tokens looked up in `abbr2term` (4,506 Cyrillic medical
   abbreviations, e.g. «ХСН» → «хроническая сердечная недостаточность»);
   expansions ADD query variants, never replace the original. Every variant is
   embedded, results merged. Cosine similarity, **top-5 candidates** overall.
