@@ -135,7 +135,7 @@ final answer = raw answer + appendix block (local PDF links only)
   **All 757 guidelines are indexed — no age/GP filter** (the assistant serves
   all physicians, pediatrics included).
 - **Query:** the extracted name **plus its abbreviation-expansion variants** —
-  uppercase tokens looked up in `abbr2term` (4,508 Cyrillic medical
+  uppercase tokens looked up in `abbr2term` (4,506 Cyrillic medical
   abbreviations, e.g. «ХСН» → «хроническая сердечная недостаточность»);
   expansions ADD query variants, never replace the original. Every variant is
   embedded, results merged. Cosine similarity, **top-5 candidates** overall.
@@ -354,7 +354,7 @@ answerer answers *this* question in the context of *this* patient.
    `card_rejected` on validation failure — filename and length only, card
    content is never logged (physician data stays out of the audit trail).
 7. **CLI parity:** `python -m medassistant ask --question "…" --card
-   Иванов_ИИ.выписка.md` (a filename in CARD_DIR or a direct path); the
+   Иванова_МП.выписка.md` (a filename in CARD_DIR or a direct path); the
    stored message (`--save`) is the plain question.
 
 Out of scope (future): attaching the full амбулаторная карта

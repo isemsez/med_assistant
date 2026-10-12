@@ -56,15 +56,15 @@ doctor may edit it mid-session). Pdf turns ignore the card entirely.
 ## Layout
 
 ```
-medassistant/            runtime package (config, llm, prompts, abbr, gindex,
-                         pipeline, appendix, audit, store, health, stats,
-                         canary, regression, cards, cli, server/)
+medassistant/            runtime package (config, llm, loopguard, prompts,
+                         abbr, gindex, pipeline, appendix, audit, store,
+                         health, stats, canary, regression, cards, cli, server/)
 scripts/                 one-time setup tools (strip_vision_gguf.py)
 models/                  Modelfiles (medgemma-cpu, medgemma-labeler, bge-cpu)
                          + .backup.modelfile of the pre-text-only definitions;
                          medgemma1.5-4b-q4km-text-only.gguf source GGUF
 data/docs_meta.json      register metadata, 757 guidelines (copied from gp-eval)
-data/abbr2term.yaml      4,508 RU medical abbreviations (RuCCoD; NO LICENSE —
+data/abbr2term.yaml      4,506 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
 data/index/              built embedding index (vectors.npy + meta.json with a
                          docs_meta freshness stamp)
@@ -174,7 +174,7 @@ python -m medassistant ask --question "Какие критерии диагно�
 python -m medassistant ask --question "pdf ХСН"            # manual pdf query
                                                              # (no answerer call)
 python -m medassistant ask --question "Что с одышкой?" `
-    --card Иванов_ИИ.выписка.md                            # patient card context
+    --card Иванова_МП.выписка.md                           # patient card context
                                                              # (filename or path)
 python -m medassistant ask --answer-file answers.jsonl # appendix machinery over
                                                       # pre-generated answers
