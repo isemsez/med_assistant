@@ -507,6 +507,14 @@ class TestStatic(Base):
         self.assertEqual(r.status_code, 200)
         self.assertIn("Мед.ассистент", r.text)
 
+    def test_js_css_served_no_cache(self):
+        # stale-JS fix (owner decision 2026-10-13): open tabs must
+        # revalidate the bundle on the next reload
+        for path in ("/app.js", "/util.js", "/style.css"):
+            r = self.client.get(path)
+            self.assertEqual(r.status_code, 200, path)
+            self.assertEqual(r.headers.get("cache-control"), "no-cache", path)
+
     def test_pdf_served(self):
         r = self.client.get("/data/pdf/" + quote(PDF_FILE))
         self.assertEqual(r.status_code, 200)
@@ -514,9 +522,10 @@ class TestStatic(Base):
 
 
 class TestDrugMapHint(Base):
-    """Register-grounded МНН lookup (owner decision 2026-10-12): the SSE
+    """Register-grounded МНН lookup v2 (owner decision 2026-10-13): the SSE
     event fires before the first token, the P.S. reaches the answerer, the
-    stored question stays plain; placeholder matches are audit-only."""
+    stored question stays plain, usable matches persist on the user row;
+    placeholder-МНН rows are not keyed, so such names never match."""
 
     def setUp(self):
         super().setUp()
@@ -524,7 +533,7 @@ class TestDrugMapHint(Base):
         self.assertIsNone(srv.app.state.drugmap, "TMP has no drugs.sqlite")
         srv.app.state.drugmap = DrugMap([
             ("Сорбифер Дурулес", "Железа сульфат+[Аскорбиновая кислота]"),
-            ("Рузам концентрат", "~"),
+            ("Кагоцел®", "~"),
         ])
 
     def tearDown(self):
@@ -539,33 +548,44 @@ class TestDrugMapHint(Base):
         payload = dict(events)["drug_map"]
         self.assertEqual(payload["matches"],
                          [{"trade": "Сорбифер Дурулес",
-                           "inn": "железа сульфат + аскорбиновая кислота"}])
-        # the answerer got the register matches; the stored question stays plain
+                           "inn": "железа сульфат + аскорбиновая кислота",
+                           "token": "сорбифер"}])
+        # the answerer got the register matches; the stored question stays
+        # plain while the matches persist on the user row (history payload)
         stream = [c for c in self.pipe.calls if c[0] == "stream"][-1]
         self.assertEqual(stream[4][0]["trade"], "Сорбифер Дурулес")
         msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
         self.assertEqual(msgs[0]["content"], "Что содержится в сорбифер дурулес")
+        self.assertEqual(msgs[0]["drug_map"],
+                         [{"trade": "Сорбифер Дурулес",
+                           "inn": "железа сульфат + аскорбиновая кислота",
+                           "token": "сорбифер"}])
+        self.assertIsNone(msgs[1]["drug_map"])
 
     def test_no_event_without_match(self):
         sid, events = self.chat("Просто вопрос про ХСН?")
         self.assertNotIn("drug_map", [e for e, _ in events])
         stream = [c for c in self.pipe.calls if c[0] == "stream"][-1]
         self.assertEqual(stream[4], [])
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertIsNone(msgs[0]["drug_map"])
 
-    def test_placeholder_match_audited_without_event(self):
-        sid, events = self.chat("про рузам концентрат")
+    def test_placeholder_rows_never_match(self):
+        # «Кагоцел®» carries placeholder МНН ~ → not keyed → no match, no
+        # event, no P.S., no stored drug_map
+        sid, events = self.chat("про кагоцел безопасен")
         self.assertNotIn("drug_map", [e for e, _ in events])
         stream = [c for c in self.pipe.calls if c[0] == "stream"][-1]
-        self.assertEqual(stream[4][0]["inn"], None)  # P.S. skipped downstream
-        recs = [json.loads(l) for l in (TMP / "audit.jsonl")
-                .read_text(encoding="utf-8").splitlines()]
-        mapped = [r for r in recs if r["stage"] == "drug_map"]
-        self.assertEqual(mapped[-1]["matches"][0]["trade"], "Рузам концентрат")
+        self.assertEqual(stream[4], [])
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertIsNone(msgs[0]["drug_map"])
 
     def test_pdf_turn_skips_lookup(self):
         sid, events = self.chat("pdf сорбифер дурулес")
         self.assertNotIn("drug_map", [e for e, _ in events])
         self.assertEqual([c[0] for c in self.pipe.calls], ["appendix"])
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertIsNone(msgs[0]["drug_map"])
 
     def test_disabled_map_changes_nothing(self):
         srv.app.state.drugmap = None

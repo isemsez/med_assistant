@@ -35,14 +35,32 @@ def card_block(display_name, text):
 def drug_block(matches):
     """Register-grounded МНН note appended after the question (owner
     decision 2026-10-12, architecture.md §3[1]): matched trade names with
-    their МНН from the ГРЛС register. Reference framing, data only — no
-    instructions. Empty string when nothing usable matched."""
-    lines = [f"«{m['trade']}» — торговое наименование, МНН: {m['inn']}"
-             for m in (matches or []) if m.get("inn")]
+    their МНН from the ГРЛС register, one line per match. Reference
+    framing, data only — no instructions. Every line anchors the doctor's
+    own word from the question (`token`, or `via` for colloquial aliases):
+    without the anchor the 4B re-identifies the drug from its own prior
+    (валидол → "Valium" → диазепам, 2026-10-13). The register attribution
+    is deliberate (§2[5]: every automated addition is clearly separated
+    and sourced) — it marks the data as register truth, not the model's
+    guess. Empty string when nothing usable matched."""
+    lines = []
+    for m in (matches or []):
+        if not m.get("inn"):
+            continue
+        if m.get("via"):
+            lines.append(f"«{m['via']}» — разговорное название, "
+                         f"«{m['trade']}» — торговое наименование, "
+                         f"МНН: {m['inn']}")
+        elif m.get("token"):
+            lines.append(f"«{m['token']}» — торговое наименование "
+                         f"«{m['trade']}», МНН: {m['inn']}")
+        else:
+            lines.append(f"«{m['trade']}» — торговое наименование, "
+                         f"МНН: {m['inn']}")
     if not lines:
         return ""
-    return ("(справочно, из государственного реестра лекарственных средств: "
-            + "; ".join(lines) + ")")
+    return ("(справочно, из государственного реестра лекарственных средств:\n"
+            + ";\n".join(lines) + ")")
 
 SYSTEM_LABELER_EXTRACT = """Ты — автоматический маркировщик ответов медицинского ассистента.
 Ты НЕ отвечаешь на вопрос врача — ты только определяешь, о каких заболеваниях

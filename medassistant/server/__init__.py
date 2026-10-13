@@ -23,6 +23,17 @@ STATIC_DIR = Path(__file__).parent / "static"
 app = FastAPI(title="med_assistant", docs_url=None, redoc_url=None)
 
 
+@app.middleware("http")
+async def _static_revalidate(request, call_next):
+    """Stale-JS fix (owner decision 2026-10-13): .js/.css responses carry
+    `Cache-Control: no-cache` so an open tab revalidates app.js/style.css
+    on the next reload instead of running yesterday's bundle."""
+    resp = await call_next(request)
+    if request.url.path.endswith((".js", ".css")):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 class ChatRequest(BaseModel):
     session_id: int
     question: str
@@ -235,9 +246,21 @@ def chat(req: ChatRequest):
 
     def gen():
         history = store.history_window(sid, config.HISTORY_WINDOW)
-        mid_user = store.add_message(sid, "user", question)
+        # register-grounded trade-name -> МНН matches (owner decision
+        # 2026-10-12): computed BEFORE the user row is stored — the usable
+        # matches persist on it (2026-10-13) and the SSE event fires before
+        # the first token so the block is instant
+        drug = (app.state.drugmap.lookup(question, cap=config.DRUG_PS_MAX)
+                if app.state.drugmap is not None else [])
+        usable = [m for m in drug if m["inn"]]
+        mid_user = store.add_message(sid, "user", question,
+                                     drug_map=usable or None)
         store.touch(sid, title=question[:60])
         aud.log("question", session_id=sid, question=question)
+        if drug:
+            aud.log("drug_map", session_id=sid, matches=drug)
+            if usable:
+                yield _sse("drug_map", {"matches": usable})
         if card_ctx is not None:
             # filename + char count only — card content is never logged
             aud.log("card_used", session_id=sid, file=req.card,
@@ -247,16 +270,6 @@ def chat(req: ChatRequest):
 
         parts, reasoning_parts, failed = [], [], False
         t_answer = time.monotonic()
-        # register-grounded trade-name -> МНН matches (owner decision
-        # 2026-10-12): audit all matches, hint/P.S. only those with a real
-        # МНН; the event fires before the first token so the hint is instant
-        drug = (app.state.drugmap.lookup(question, cap=config.DRUG_PS_MAX)
-                if app.state.drugmap is not None else [])
-        if drug:
-            aud.log("drug_map", session_id=sid, matches=drug)
-            usable = [m for m in drug if m["inn"]]
-            if usable:
-                yield _sse("drug_map", {"matches": usable})
         # medgemma's reasoning always starts with a stray "thought\n"; it
         # arrives split across stream deltas, so it is dropped char-wise
         drop = len("thought\n")

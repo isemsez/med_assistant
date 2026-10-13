@@ -169,6 +169,20 @@ function renderAppendix(payload, anchor) {
   }
 }
 
+// МНН grounding block under the question bubble (owner decision
+// 2026-10-13): ONE renderer for both the live `drug_map` SSE event and the
+// stored history (user rows carry m.drug_map) — a visible .sources-style
+// block that persists across reloads.
+function renderDrugMap(matches, anchor) {
+  const wrap = document.createElement("div");
+  wrap.className = "sources drug";
+  const items = (matches || []).map((m) =>
+    `<li>${esc(m.trade)} → ${esc(m.inn)}</li>`).join("");
+  wrap.innerHTML = `<ul>${items}</ul>`;
+  insertAfter(wrap, anchor || null);
+  return wrap;
+}
+
 async function loadSession(id) {
   const run = (async () => {
     state.current = id;
@@ -219,6 +233,8 @@ async function loadSession(id) {
           t.body.textContent = m.reasoning.replace(/^thought\n/, "");
         }
         if (m.appendix) renderAppendix(m.appendix, node);
+      } else if (m.drug_map && m.drug_map.length) {
+        renderDrugMap(m.drug_map, node); // persisted МНН block under the question
       }
     }
     if (st) $("#messages").appendChild(st.wrap); // resume the live turn in place
@@ -498,13 +514,9 @@ async function send(question) {
           // the reasoning from scratch — drop the looped garbage
           if (thinking) thinking.body.textContent = "";
         } else if (ev.event === "drug_map") {
-          // register-grounded trade-name -> МНН hint under the question
-          // bubble (transient turn metadata: never stored, gone on reload)
-          const hint = document.createElement("div");
-          hint.className = "drug-hint";
-          hint.innerHTML = (data.matches || []).map((m) =>
-            `${esc(m.trade)} → МНН: ${esc(m.inn)}`).join("<br>");
-          wrap.insertBefore(hint, asst);
+          // register-grounded МНН block under the question bubble; the
+          // same renderer restores it from m.drug_map after a reload
+          renderDrugMap(data.matches, userNode);
           autoScroll();
         } else if (ev.event === "kind" && data.turn === "pdf") {
           // manual pdf turn renders as ONE row: the question bubble is

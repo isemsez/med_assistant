@@ -46,6 +46,23 @@ class TestStore(unittest.TestCase):
         self.assertEqual(msgs[1]["reasoning"], "думал…")
         self.assertIsNone(msgs[2]["reasoning"])
 
+    def test_drug_map_roundtrip(self):
+        # МНН matches persist on USER rows (owner decision 2026-10-13):
+        # the .sources.drug block survives reloads
+        sid = self.store.create_session()
+        self.store.add_message(
+            sid, "user", "что есть в сорбифере",
+            drug_map=[{"trade": "Сорбифер Дурулес",
+                       "inn": "железа сульфат + аскорбиновая кислота"}])
+        self.store.add_message(sid, "assistant", "ответ")
+        self.store.add_message(sid, "user", "вопрос без лекарств")
+        msgs = self.store.get_messages(sid)
+        self.assertEqual(msgs[0]["drug_map"],
+                         [{"trade": "Сорбифер Дурулес",
+                           "inn": "железа сульфат + аскорбиновая кислота"}])
+        self.assertIsNone(msgs[1]["drug_map"])
+        self.assertIsNone(msgs[2]["drug_map"])
+
     def test_session_card_pin_roundtrip(self):
         a = self.store.create_session()
         b = self.store.create_session()

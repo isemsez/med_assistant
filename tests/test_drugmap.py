@@ -7,15 +7,32 @@ from medassistant.drugmap import DrugMap, clean_inn, load
 
 ROWS = [
     ("Сорбифер Дурулес", "Железа сульфат+[Аскорбиновая кислота]"),
-    ("Сорбифер", "Железа сульфат"),
-    ("Нурофен", "Ибупрофен"),
-    ("Рузам концентрат", "~"),
-    ("Кагоцел", "Кагоцел"),
+    ("Нурофен®", "Ибупрофен"),
+    ("Нурофен® Форте", "Ибупрофен"),
+    ("Нурофен® Экспресс", "Ибупрофен"),
+    ("Нурофен® для детей", "Ибупрофен"),
+    ("Нурофен® Плюс", "Ибупрофен+Кодеин"),
+    ("Нурофен® Интенсив", "Ибупрофен+Парацетамол"),
+    ("L-Тироксин 50", "Левотироксин натрия"),
+    ("Д-Пантенол", "Декспантенол"),
+    ("Д-Пантенол плюс антисептик", "Декспантенол+Хлоргексидин"),
+    ("1,3-Диэтилбензол", "Диэтилбензол"),          # digit-led: skipped
+    ("9 Месяцев Фолиевая кислота", "Фолиевая кислота"),  # digit-led: skipped
+    ("Азитромицин", "Азитромицин"),
+    ("Азитромицин Форте", "Азитромицин"),
+    ("Валерианы настойка", "Валерианы лекарственной корневищ с корнями настойка"),
+    ("Валерианы настойка Реневал", "Валерианы лекарственной корневищ с корнями настойка"),
+    ("Валерианы экстракт", "Валерианы лекарственной корневищ с корнями экстракт"),
+    ("Железо Комплекс", "Железа фумарат"),
+    ("Кагоцел®", "~"),                              # placeholder МНН: not keyed
 ]
 
+ALIASES = {"валерьянка": "Валерианы настойка",  # value = register trade name
+           "кагоцел": "меглюмина акридонацетат"}  # value = direct МНН
 
-def dmap():
-    return DrugMap(ROWS)
+
+def dmap(aliases=None):
+    return DrugMap(ROWS, aliases=aliases)
 
 
 class TestCleanInn(unittest.TestCase):
@@ -27,61 +44,136 @@ class TestCleanInn(unittest.TestCase):
         self.assertEqual(clean_inn("~"), "~")
 
 
-class TestLookup(unittest.TestCase):
-    def test_nominal_multiword(self):
-        m = dmap().lookup("Что содержится в сорбифер дурулес")
-        self.assertEqual([x["trade"] for x in m], ["Сорбифер Дурулес"])
-        self.assertEqual(m[0]["inn"], "железа сульфат + аскорбиновая кислота")
+class TestPrefixMatching(unittest.TestCase):
+    def test_prepositional(self):
+        m = dmap().lookup("что есть в сорбифере")
+        self.assertEqual(m, [{"trade": "Сорбифер Дурулес",
+                              "inn": "железа сульфат + аскорбиновая кислота",
+                              "token": "сорбифере"}])
 
-    def test_inflected_genitive(self):
-        m = dmap().lookup("Состав сорбифера дурулеса?")
-        self.assertEqual(m[0]["trade"], "Сорбифер Дурулес")
-
-    def test_hyphenated_name(self):
-        m = dmap().lookup("совместимость нурофен-кагоцел")  # one hyphenated blob
-        self.assertIn("Нурофен", [x["trade"] for x in m])
-
-    def test_subsumed_short_name_dropped(self):
-        m = dmap().lookup("в сорбифер дурулес")
+    def test_instrumental(self):
+        m = dmap().lookup("что делать с сорбифером")
         self.assertEqual([x["trade"] for x in m], ["Сорбифер Дурулес"])
 
-    def test_short_name_alone_matches(self):
-        m = dmap().lookup("дозировка сорбифера")
-        self.assertEqual([x["trade"] for x in m], ["Сорбифер"])
+    def test_genitive_both_words(self):
+        m = dmap().lookup("состав сорбифера дурулеса")
+        self.assertEqual([x["trade"] for x in m], ["Сорбифер Дурулес"])
 
-    def test_latin_case_insensitive(self):
-        m = DrugMap([("Nurofen", "Ибупрофен")]).lookup("дозировка NUROFEN")
-        self.assertEqual([x["trade"] for x in m], ["Nurofen"])
-        self.assertEqual(m[0]["inn"], "ибупрофен")
+    def test_inflected_inn_token(self):
+        m = dmap().lookup("дозировка азитромицина")
+        self.assertEqual(m, [{"trade": "Азитромицин", "inn": "азитромицин",
+                              "token": "азитромицина"}])
 
-    def test_no_match_plain_words(self):
+    def test_plain_words_no_match(self):
         self.assertEqual(dmap().lookup("какие симптомы у гриппа"), [])
+        # degenerate keys never exist; tier 3 must stay silent too
+        self.assertEqual(dmap().lookup("дозировка и лекарство"), [])
 
-    def test_no_prefix_poison(self):
-        # a longer word starting like the trade name must not match
-        self.assertEqual(dmap().lookup("сорбиферация препарата"), [])
-
-    def test_placeholder_inn_returns_none(self):
-        m = dmap().lookup("про рузам концентрат")
-        self.assertEqual(m, [{"trade": "Рузам концентрат", "inn": None}])
-
-    def test_trademark_sign_stripped_from_display(self):
-        m = DrugMap([("Аспирин®", "Ацетилсалициловая кислота")])
-        self.assertEqual(m.lookup("дозировка аспирина"),
-                         [{"trade": "Аспирин",
-                           "inn": "ацетилсалициловая кислота"}])
-
-    def test_cap_keeps_first_occurrence(self):
-        m = dmap().lookup("нурофен и кагоцел", cap=1)
-        self.assertEqual([x["trade"] for x in m], ["Нурофен"])
-
-    def test_multiple_matches_sorted_by_position(self):
-        m = dmap().lookup("кагоцел после нурофен")
-        self.assertEqual([x["trade"] for x in m], ["Кагоцел", "Нурофен"])
+    def test_stoplisted_word_never_matches(self):
+        # «железо» would prefix-match the key from «Железо Комплекс» —
+        # the stoplist must suppress it
+        self.assertEqual(dmap().lookup("можно ли железо каждый день"), [])
 
     def test_empty_question_and_empty_map(self):
         self.assertEqual(dmap().lookup(""), [])
         self.assertEqual(len(DrugMap([])), 0)
+
+
+class TestLeadingSegments(unittest.TestCase):
+    def test_stereo_prefix_keys_next_word(self):
+        m = dmap().lookup("l-тироксин 100 дозировка")
+        self.assertEqual(m, [{"trade": "L-Тироксин 50",
+                              "inn": "левотироксин натрия",
+                              "token": "тироксин"}])
+
+    def test_cyrillic_stereo_prefix(self):
+        m = dmap().lookup("крем д-пантенол плюс антисептик")
+        # adjacent «плюс антисептик» restricts the ambiguous пантенол group
+        self.assertEqual(m, [{"trade": "Д-Пантенол плюс антисептик",
+                              "inn": "декспантенол + хлоргексидин",
+                              "token": "пантенол"}])
+
+    def test_bare_stereo_prefix_modal_picks_base(self):
+        m = dmap().lookup("д-пантенол детям")
+        self.assertEqual(m[0]["trade"], "Д-Пантенол")
+        self.assertEqual(m[0]["inn"], "декспантенол")
+
+    def test_digit_led_names_skipped(self):
+        self.assertEqual(dmap().lookup("про 1,3-диэтилбензол"), [])
+        self.assertEqual(dmap().lookup("фолиевая кислота при беременности"), [])
+
+
+class TestAmbiguity(unittest.TestCase):
+    def test_bare_token_modal_most_rows(self):
+        m = dmap().lookup("дозировка нурофена")
+        self.assertEqual(m, [{"trade": "Нурофен", "inn": "ибупрофен",
+                              "token": "нурофена"}])
+
+    def test_adjacent_second_word_restricts_plus(self):
+        m = dmap().lookup("нурофен плюс от чего")
+        self.assertEqual(m, [{"trade": "Нурофен Плюс",
+                              "inn": "ибупрофен + кодеин",
+                              "token": "нурофен"}])
+
+    def test_adjacent_second_word_restricts_intensive(self):
+        m = dmap().lookup("нурофен интенсив состав")
+        self.assertEqual(m, [{"trade": "Нурофен Интенсив",
+                              "inn": "ибупрофен + парацетамол",
+                              "token": "нурофен"}])
+
+    def test_non_adjacent_plus_does_not_restrict(self):
+        m = dmap().lookup("плюс к нурофену витамин")
+        self.assertEqual(m, [{"trade": "Нурофен", "inn": "ибупрофен",
+                              "token": "нурофену"}])
+
+    def test_or_word_between_does_not_restrict(self):
+        m = dmap().lookup("нурофен или кагоцел")
+        self.assertEqual(m, [{"trade": "Нурофен", "inn": "ибупрофен",
+                              "token": "нурофен"}])
+
+    def test_repeated_token_deduped(self):
+        m = dmap().lookup("нурофен после нурофена")
+        self.assertEqual([x["trade"] for x in m], ["Нурофен"])
+
+    def test_cap_keeps_first_occurrence(self):
+        m = dmap().lookup("нурофен и сорбифер", cap=1)
+        self.assertEqual([x["trade"] for x in m], ["Нурофен"])
+
+
+class TestAliases(unittest.TestCase):
+    def test_alias_to_register_name(self):
+        m = dmap(aliases=ALIASES).lookup("валерьянка — это лекарство?")
+        self.assertEqual(m, [{"trade": "Валерианы настойка",
+                              "inn": "валерианы лекарственной корневищ"
+                                     " с корнями настойка",
+                              "via": "валерьянка"}])
+
+    def test_alias_direct_inn_for_register_hole(self):
+        m = dmap(aliases=ALIASES).lookup("кагоцел безопасен?")
+        self.assertEqual(m, [{"trade": "Кагоцел",
+                              "inn": "меглюмина акридонацетат"}])
+
+    def test_alias_tier_skipped_when_dict_matched(self):
+        m = dmap(aliases=ALIASES).lookup("нурофен или кагоцел")
+        self.assertEqual([x["trade"] for x in m], ["Нурофен"])
+
+    def test_no_aliases_no_tier3(self):
+        self.assertEqual(dmap().lookup("валерьянка — это лекарство?"), [])
+
+
+class TestFuzzy(unittest.TestCase):
+    def test_tight_typo_matches_unambiguous_key(self):
+        m = dmap().lookup("дозировка азитромицна")  # missing и
+        self.assertEqual(m, [{"trade": "Азитромицин", "inn": "азитромицин",
+                              "token": "азитромицна"}])
+
+    def test_short_token_never_fuzzy(self):
+        self.assertEqual(dmap().lookup("нурофн дозировка"), [])
+
+    def test_ambiguous_key_never_fuzzy(self):
+        # «нурофкн» is within Levenshtein 2 of the ambiguous key «нурофе» —
+        # the typo tier only accepts unambiguous keys, so nothing matches
+        self.assertEqual(dmap().lookup("нурофкн дозировка"), [])
 
 
 class TestLoad(unittest.TestCase):
@@ -107,6 +199,38 @@ class TestLoad(unittest.TestCase):
             self.assertEqual(hit[0]["trade"], "Сорбифер Дурулес")
             self.assertEqual(hit[0]["inn"],
                              "железа сульфат + аскорбиновая кислота")
+
+    def test_load_reads_alias_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "drugs.sqlite"
+            con = sqlite3.connect(str(p))
+            con.execute("create table drugs (trade_name text, inn text)")
+            con.execute("insert into drugs values (?, ?)",
+                        ("Валерианы настойка",
+                         "Валерианы лекарственной корневищ с корнями настойка"))
+            con.commit()
+            con.close()
+            a = Path(td) / "aliases.yaml"
+            a.write_text("# comment\nвалерьянка: Валерианы настойка\n",
+                         encoding="utf-8")
+            m = load(path=p, aliases_path=a)
+            hit = m.lookup("валерьянка помогает?")
+            self.assertEqual(hit[0]["trade"], "Валерианы настойка")
+
+    def test_load_missing_alias_file_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "drugs.sqlite"
+            con = sqlite3.connect(str(p))
+            con.execute("create table drugs (trade_name text, inn text)")
+            con.execute("insert into drugs values (?, ?)",
+                        ("Кагоцел", "меглюмина акридонацетат"))
+            con.commit()
+            con.close()
+            m = load(path=p, aliases_path=Path(td) / "nope.yaml")
+            self.assertEqual(m.lookup("кагоцел?"),
+                             [{"trade": "Кагоцел",
+                               "inn": "меглюмина акридонацетат",
+                               "token": "кагоцел"}])
 
 
 if __name__ == "__main__":

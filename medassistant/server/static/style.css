@@ -57,13 +57,14 @@ details.thinking .think-body {
   color: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.45; } }
 
-/* register-grounded МНН hint under the question bubble (2026-10-12):
-   transient turn metadata — never stored, gone after a reload */
-.drug-hint { max-width: 860px; margin: -6px auto 10px; font-size: 12.5px;
-  color: var(--muted); }
+/* МНН grounding block under the question bubble (2026-10-13): a
+   .sources-style card with its own accent, persisted across reloads */
+.sources.drug { background: #eef3fa; border-color: #c9d9ea; padding: 4px 14px; }
+.sources.drug ul { margin: 0; padding-left: 0; list-style: none; }
+.sources.drug li { margin: 2px 0; }
 
 .sources { max-width: 860px; margin: -6px auto 16px; background: var(--src-bg);
-  border: 1px solid #d6e2d6; border-radius: 10px; padding: 10px 14px; font-size: 13.5px; }
+  border: 1px solid #d6e2d6; border-radius: 10px; padding: 6px 14px; font-size: 13.5px; }
 .sources .caption { font-size: 11px; letter-spacing: 0.4px; text-transform: uppercase;
   color: var(--muted); margin-bottom: 6px; }
 .sources ul { margin: 0; padding-left: 18px; }

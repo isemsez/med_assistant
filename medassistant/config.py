@@ -13,6 +13,7 @@ DEFAULTS = {
     "AUDIT_LOG": "logs/audit.jsonl",
     "CARD_DIR": "data/patient_cards",
     "DRUGS_DB": "data/drugs.sqlite",
+    "DRUG_ALIASES": "data/drug_aliases.yaml",
 }
 
 
@@ -45,6 +46,7 @@ SESSIONS_DB = _path("SESSIONS_DB")
 AUDIT_LOG_PATH = _path("AUDIT_LOG")
 CARD_DIR = _path("CARD_DIR")
 DRUGS_DB = _path("DRUGS_DB")
+DRUG_ALIASES_PATH = _path("DRUG_ALIASES")
 
 HISTORY_WINDOW = int(os.environ.get("HISTORY_WINDOW", "6"))
 DISEASE_CAP = int(os.environ.get("DISEASE_CAP", "3"))
@@ -68,8 +70,13 @@ AUTO_PICK_GAP = float(os.environ.get("AUTO_PICK_GAP", "0.05"))
 CARD_MAX_CHARS = int(os.environ.get("CARD_MAX_CHARS", "8000"))
 
 # Register-grounded МНН lookup (owner decision 2026-10-12, architecture.md
-# §3[1]): trade names from drugs.sqlite get a «справочно» P.S. + UI hint.
-# A missing DB silently disables the feature; DRUG_PS_MAX caps matches.
+# §3[1]): trade names from drugs.sqlite get a «справочно» P.S. + a persisted
+# `.sources.drug` block under the question bubble. Matching v2 (owner
+# decision 2026-10-13): first-word dictionary keys, adjacent-bigram
+# restriction, modal МНН, then curated aliases (data/drug_aliases.yaml —
+# owner-curated truth, value = register trade name or a direct МНН for
+# register holes) and a tight typo tier, only when nothing matched. A
+# missing DB silently disables the feature; DRUG_PS_MAX caps matches.
 DRUG_PS_MAX = int(os.environ.get("DRUG_PS_MAX", "5"))
 
 ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "2048"))

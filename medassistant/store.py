@@ -2,12 +2,16 @@
 
 Tables: sessions(id, title, created_at, updated_at, card_file),
 messages(id, session_id, role, content, appendix_json, reasoning, kind,
-created_at). `appendix_json` on assistant rows holds the full AppendixResult
-payload; `reasoning` holds the answerer's thinking text (restored collapsed on
-reload); `kind` separates chat turns from manual «pdf » turns ('pdf' rows
-never enter the answerer history). `card_file` pins the last used patient
-card to the session — invisible chat metadata for picker preselection
-(architecture.md §9); message content never contains card text.
+drug_map, created_at). `appendix_json` on assistant rows holds the full
+AppendixResult payload; `reasoning` holds the answerer's thinking text
+(restored collapsed on reload); `kind` separates chat turns from manual
+«pdf » turns ('pdf' rows never enter the answerer history); `drug_map` on
+user rows holds the register-grounded МНН matches of that question (JSON
+list of {trade, inn} — the `.sources.drug` block under the question bubble,
+persisted across reloads, owner decision 2026-10-13). `card_file` pins the
+last used patient card to the session — invisible chat metadata for picker
+preselection (architecture.md §9); message content never contains card
+text.
 """
 
 import datetime
@@ -35,6 +39,7 @@ CREATE TABLE IF NOT EXISTS messages (
     appendix_json TEXT,
     reasoning TEXT,
     kind TEXT NOT NULL DEFAULT 'chat',
+    drug_map TEXT,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
@@ -64,6 +69,8 @@ class Store:
         if "kind" not in cols:
             self.conn.execute(
                 "ALTER TABLE messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'")
+        if "drug_map" not in cols:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN drug_map TEXT")
         s_cols = {r["name"] for r in
                   self.conn.execute("PRAGMA table_info(sessions)")}
         if "card_file" not in s_cols:
@@ -140,15 +147,18 @@ class Store:
     # -- messages ---------------------------------------------------------
 
     def add_message(self, session_id, role, content, appendix_payload=None,
-                    reasoning=None, kind="chat"):
+                    reasoning=None, kind="chat", drug_map=None):
         now = utc_ts()
         appendix_json = (json.dumps(appendix_payload, ensure_ascii=False)
                          if appendix_payload is not None else None)
+        drug_json = (json.dumps(drug_map, ensure_ascii=False)
+                     if drug_map else None)
         with self._lock:
             cur = self.conn.execute(
                 "INSERT INTO messages (session_id, role, content, appendix_json, "
-                "reasoning, kind, created_at) VALUES (?,?,?,?,?,?,?)",
-                (session_id, role, content, appendix_json, reasoning, kind, now))
+                "reasoning, kind, drug_map, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (session_id, role, content, appendix_json, reasoning, kind,
+                 drug_json, now))
             self.conn.commit()
             return cur.lastrowid
 
@@ -163,13 +173,16 @@ class Store:
         with self._lock:
             rows = self.conn.execute(
                 "SELECT id, role, content, appendix_json, reasoning, kind, "
-                "created_at FROM messages WHERE session_id=? ORDER BY id",
+                "drug_map, created_at FROM messages WHERE session_id=? "
+                "ORDER BY id",
                 (session_id,)).fetchall()
         out = []
         for r in rows:
             d = dict(r)
             d["appendix"] = (json.loads(d.pop("appendix_json"))
                              if d["appendix_json"] else None)
+            d["drug_map"] = (json.loads(d.pop("drug_map"))
+                             if d["drug_map"] else None)
             out.append(d)
         return out
 

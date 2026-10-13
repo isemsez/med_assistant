@@ -145,18 +145,21 @@ def cmd_ask(args):
             raise SystemExit(2)
 
     history = store.history_window(session_id, config.HISTORY_WINDOW) if store else []
-    if store:
-        store.add_message(session_id, "user", args.question)
-    aud.log("question", session_id=session_id, question=args.question)
-    if card is not None:
-        aud.log("card_used", session_id=session_id, file=args.card,
-                chars=len(card[1]))
     # register-grounded МНН lookup (owner decision 2026-10-12): same P.S.
-    # the web app injects; a note line per usable match
+    # the web app injects; a note line per usable match, persisted on the
+    # saved user row like the server does
     drug = None
     dmap = drugmap.load()
     if dmap is not None:
         drug = dmap.lookup(args.question, cap=config.DRUG_PS_MAX)
+    usable = [m for m in (drug or []) if m["inn"]]
+    if store:
+        store.add_message(session_id, "user", args.question,
+                          drug_map=usable or None)
+    aud.log("question", session_id=session_id, question=args.question)
+    if card is not None:
+        aud.log("card_used", session_id=session_id, file=args.card,
+                chars=len(card[1]))
     if drug:
         aud.log("drug_map", session_id=session_id, matches=drug)
         for m in drug:
