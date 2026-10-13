@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from . import audit as audit_mod
-from . import cards, config, gindex, llm
+from . import cards, config, drugmap, gindex, llm
 from .pipeline import split_pdf_prefix
 
 
@@ -151,12 +151,24 @@ def cmd_ask(args):
     if card is not None:
         aud.log("card_used", session_id=session_id, file=args.card,
                 chars=len(card[1]))
+    # register-grounded МНН lookup (owner decision 2026-10-12): same P.S.
+    # the web app injects; a note line per usable match
+    drug = None
+    dmap = drugmap.load()
+    if dmap is not None:
+        drug = dmap.lookup(args.question, cap=config.DRUG_PS_MAX)
+    if drug:
+        aud.log("drug_map", session_id=session_id, matches=drug)
+        for m in drug:
+            if m["inn"]:
+                print(f"[МНН] {m['trade']}: {m['inn']}", file=sys.stderr)
 
     parts = []
     t_answer = time.monotonic()
     try:
         shown_thinking = False
-        for event in pipe.stream_answer(args.question, history, card=card):
+        for event in pipe.stream_answer(args.question, history, card=card,
+                                        drug=drug):
             if event["type"] == "reasoning":
                 if not shown_thinking:
                     print("(модель размышляет — скрыто, пишется в stderr)",
