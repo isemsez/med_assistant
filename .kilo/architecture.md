@@ -100,16 +100,29 @@ final answer = raw answer + appendix block (local PDF links only)
   was reverted. The plain МНН-only rule answers such questions correctly
   in most runs but still fabricates occasionally (2026-10-11) — residual
   4B flakiness, documented lever: 27B tier via `CANDIDATE_*`.
-  **Register-grounded МНН lookup** (owner decision 2026-10-12): the
-  question is scanned for register trade names (`data/drugs.sqlite`, built
-  by `scripts/grls_to_sqlite.py` from a ГРЛС export; inflection-tolerant
-  matching, capped); each usable match gets a «справочно» P.S. appended to
-  the user message (`prompts.drug_block`, after the question, before the
-  card block) and a transient hint line under the question bubble in the
-  UI (`drug_map` SSE event — never stored, gone after a reload). This
-  coexists with the МНН-only rule: it removes the knowledge gap that
-  caused the fabrications, not the rule. A missing DB silently disables
-  the feature; placeholder register МНН (`~`) matches are audit-only.
+  **Register-grounded МНН lookup** (owner decision 2026-10-12; matching v2
+  2026-10-13): the question is scanned for register trade names
+  (`data/drugs.sqlite`, built by `scripts/grls_to_sqlite.py` from a ГРЛС
+  export); each usable match gets a «справочно» P.S. appended to the user
+  message (`prompts.drug_block`, after the question, before the card block)
+  and a `.sources.drug` block under the question bubble in the UI
+  (`drug_map` SSE event live; persisted on the user row as
+  `messages.drug_map`, restored on reload). This coexists with the
+  МНН-only rule: it removes the knowledge gap that caused the fabrications,
+  not the rule. A missing DB silently disables the feature. Matching v2
+  (owner's dictionary scheme, replaces the v1 stem+endings scan):
+  names keyed by first word (last letter stripped, ≥3 chars; leading
+  stereo segments «L-», «Д-», «D,L-» dropped, digit-led names skipped;
+  placeholder-МНН `~` rows not keyed); question tokens ≥5 chars (minus a
+  stoplist) match the longest key they start with; an ambiguous key is
+  restricted by the adjacent bigram («нурофен плюс» → ибупрофен+кодеин)
+  or falls back to the modal МНН (most rows, tie → the МНН matching the
+  names' first word; «нурофен» → ибупрофен). When nothing matched:
+  curated aliases (`data/drug_aliases.yaml` — owner-curated truth, value =
+  register trade name or a direct МНН for register holes like кагоцел →
+  меглюмина акридонацетат), then a tight typo tier (Levenshtein ≤2, same
+  first 3 chars, token ≥7 chars, unambiguous keys only). Matches are
+  deduped and capped (`DRUG_PS_MAX`).
 - No footnote rule, no self-labelling, no few-shot examples that could leak.
   The prompt stays **silent** about footnotes — no negative instruction
   either: the model has no such instinct to suppress, and naming the behavior

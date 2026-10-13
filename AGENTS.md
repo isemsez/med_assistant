@@ -68,6 +68,11 @@ data/docs_meta.json      register metadata, 757 guidelines (copied from gp-eval)
 data/drugs.sqlite        ГРЛС drugs register (built by scripts/grls_to_sqlite.py;
                          trade name → МНН grounding for the answerer, missing
                          file = feature silently off)
+data/drug_aliases.yaml   owner-curated colloquial aliases for the МНН lookup
+                         (tier 3, fires only when the dict found nothing;
+                         value = register trade name OR a direct МНН for
+                         register holes — e.g. валерьянка, кагоцел; owner
+                         truth, never auto-extended)
 data/abbr2term.yaml      4,506 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
 data/index/              built embedding index (vectors.npy + meta.json with a
