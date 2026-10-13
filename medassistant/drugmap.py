@@ -95,11 +95,13 @@ def _levenshtein(a, b, cap):
 
 
 class DrugMap:
-    def __init__(self, rows, aliases=None):
+    def __init__(self, rows, aliases=None, glosses=None):
         """rows: (trade_name, inn) register rows (every row counts toward
         the modal МНН). `aliases`: curated {colloquial: value} map — the
         value either names a register trade name (resolved through this
-        dict) or is a direct МНН for register holes."""
+        dict) or is a direct МНН for register holes. `glosses`: curated
+        {normalized inn: english form} map for composite/obscure МНН the
+        model cannot parse (owner-curated truth, data/inn_gloss.yaml)."""
         groups = {}
         for trade, inn in rows:
             if not trade or len(trade) > MAX_NAME_CHARS:
@@ -126,6 +128,9 @@ class DrugMap:
             a = _norm(alias)
             if len(_word_key(a)) >= KEY_MIN and _norm(value):
                 self._aliases[_word_key(a)] = (a, _norm(value))
+        # english glosses keyed by the normalized register МНН
+        self._glosses = {_norm(k): (v or "").strip()
+                         for k, v in (glosses or {}).items() if _norm(v)}
 
     def __len__(self):
         return sum(len(m) for m, _ in self._groups.values())
@@ -278,9 +283,11 @@ class DrugMap:
         return out
 
     def lookup(self, question, cap=DEFAULT_CAP):
-        """[{"trade", "inn"}, ...] for trade names found in the question,
-        by first occurrence. Dict matching first; only when nothing matched,
-        the curated aliases, then the tight typo tier."""
+        """[{"trade", "inn", ...}, ...] for trade names found in the
+        question, by first occurrence; `token`/`via` anchor the doctor's
+        word, `en` carries a curated English gloss when one exists. Dict
+        matching first; only when nothing matched, the curated aliases,
+        then the tight typo tier."""
         q = _norm(question)
         if not q:
             return []
@@ -289,15 +296,20 @@ class DrugMap:
             out = self._alias_matches(q, cap)
         if not out:
             out = self._fuzzy_matches(q, cap)
+        for m in out:
+            gloss = self._glosses.get(m["inn"])
+            if gloss:
+                m["en"] = gloss
         return out
 
 
 ALIAS_LINE_RE = re.compile(r"^([^:#]+?)\s*:\s*(.+)$")
 
 
-def _load_aliases(path):
-    """data/drug_aliases.yaml — flat `colloquial: value`, owner-curated
-    truth (never auto-extended). Missing/broken file = no aliases."""
+def _load_flat(path):
+    """Flat `key: value` yaml with # comments (drug_aliases.yaml,
+    inn_gloss.yaml) — owner-curated truth, never auto-extended. Missing
+    or broken file = empty map."""
     if not path.exists():
         return {}
     out = {}
@@ -311,13 +323,14 @@ def _load_aliases(path):
     return out
 
 
-def load(path=None, aliases_path=None):
-    """drugs.sqlite (+ optional alias file) -> DrugMap; None when the DB is
-    missing (feature silently off)."""
-    if path is None or aliases_path is None:
+def load(path=None, aliases_path=None, gloss_path=None):
+    """drugs.sqlite (+ curated alias/gloss files) -> DrugMap; None when
+    the DB is missing (feature silently off)."""
+    if path is None or aliases_path is None or gloss_path is None:
         from . import config
         path = path or config.DRUGS_DB
         aliases_path = aliases_path or config.DRUG_ALIASES_PATH
+        gloss_path = gloss_path or config.INN_GLOSS_PATH
     p = Path(path)
     if not p.exists():
         return None
@@ -326,4 +339,5 @@ def load(path=None, aliases_path=None):
         rows = con.execute("select trade_name, inn from drugs").fetchall()
     finally:
         con.close()
-    return DrugMap(rows, aliases=_load_aliases(Path(aliases_path)))
+    return DrugMap(rows, aliases=_load_flat(Path(aliases_path)),
+                   glosses=_load_flat(Path(gloss_path)))

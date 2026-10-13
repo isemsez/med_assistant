@@ -31,8 +31,8 @@ ALIASES = {"валерьянка": "Валерианы настойка",  # val
            "кагоцел": "меглюмина акридонацетат"}  # value = direct МНН
 
 
-def dmap(aliases=None):
-    return DrugMap(ROWS, aliases=aliases)
+def dmap(aliases=None, glosses=None):
+    return DrugMap(ROWS, aliases=aliases, glosses=glosses)
 
 
 class TestCleanInn(unittest.TestCase):
@@ -174,6 +174,46 @@ class TestFuzzy(unittest.TestCase):
         # «нурофкн» is within Levenshtein 2 of the ambiguous key «нурофе» —
         # the typo tier only accepts unambiguous keys, so nothing matches
         self.assertEqual(dmap().lookup("нурофкн дозировка"), [])
+
+
+class TestGlosses(unittest.TestCase):
+    GLOSSES = {"железа сульфат + аскорбиновая кислота":
+               "ferrous sulfate + ascorbic acid"}
+
+    def test_gloss_attached_to_matching_inn(self):
+        m = dmap(glosses=self.GLOSSES).lookup("что есть в сорбифере")
+        self.assertEqual(m[0]["en"], "ferrous sulfate + ascorbic acid")
+
+    def test_no_gloss_no_field(self):
+        m = dmap(glosses=self.GLOSSES).lookup("дозировка нурофена")
+        self.assertNotIn("en", m[0])
+
+    def test_gloss_covers_alias_matches_too(self):
+        glosses = {**self.GLOSSES,
+                   "валерианы лекарственной корневищ с корнями настойка":
+                       "valerian tincture"}
+        m = dmap(aliases=ALIASES, glosses=glosses).lookup(
+            "валерьянка помогает?")
+        self.assertEqual(m[0]["en"], "valerian tincture")
+
+    def test_load_reads_gloss_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "drugs.sqlite"
+            con = sqlite3.connect(str(p))
+            con.execute("create table drugs (trade_name text, inn text)")
+            con.execute("insert into drugs values (?, ?)",
+                        ("Валидол", "Левоментола раствор в ментилизовалерате"))
+            con.commit()
+            con.close()
+            g = Path(td) / "gloss.yaml"
+            g.write_text(
+                "# gloss\nлевоментола раствор в ментилизовалерате:"
+                " levomenthol in menthyl isovalerate\n", encoding="utf-8")
+            m = load(path=p, aliases_path=Path(td) / "no-aliases.yaml",
+                     gloss_path=g)
+            self.assertEqual(
+                m.lookup("как действует валидол")[0]["en"],
+                "levomenthol in menthyl isovalerate")
 
 
 class TestLoad(unittest.TestCase):

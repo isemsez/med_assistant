@@ -42,21 +42,26 @@ def drug_block(matches):
     (валидол → "Valium" → диазепам, 2026-10-13). The register attribution
     is deliberate (§2[5]: every automated addition is clearly separated
     and sourced) — it marks the data as register truth, not the model's
-    guess. Empty string when nothing usable matched."""
+    guess. Composite/obscure МНН carry a curated English gloss (`en`,
+    data/inn_gloss.yaml): the 4B reasons in English and substitutes a
+    plausible compound when it cannot parse a rare Russian token
+    (ментилизовалерат -> "menthylsalicylate", 2026-10-13). Empty string
+    when nothing usable matched."""
     lines = []
     for m in (matches or []):
         if not m.get("inn"):
             continue
+        inn = m["inn"] + (f" ({m['en']})" if m.get("en") else "")
         if m.get("via"):
             lines.append(f"«{m['via']}» — разговорное название, "
                          f"«{m['trade']}» — торговое наименование, "
-                         f"МНН: {m['inn']}")
+                         f"МНН: {inn}")
         elif m.get("token"):
             lines.append(f"«{m['token']}» — торговое наименование "
-                         f"«{m['trade']}», МНН: {m['inn']}")
+                         f"«{m['trade']}», МНН: {inn}")
         else:
             lines.append(f"«{m['trade']}» — торговое наименование, "
-                         f"МНН: {m['inn']}")
+                         f"МНН: {inn}")
     if not lines:
         return ""
     return ("(справочно, из государственного реестра лекарственных средств:\n"

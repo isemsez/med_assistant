@@ -122,7 +122,14 @@ final answer = raw answer + appendix block (local PDF links only)
   register trade name or a direct МНН for register holes like кагоцел →
   меглюмина акридонацетат), then a tight typo tier (Levenshtein ≤2, same
   first 3 chars, token ≥7 chars, unambiguous keys only). Matches are
-  deduped and capped (`DRUG_PS_MAX`).
+  deduped and capped (`DRUG_PS_MAX`). Every P.S. line anchors the
+  doctor's own word to the register row (`token`/`via`) — without the
+  anchor the 4B re-identifies the drug from its own prior (валидол →
+  "Valium" → диазепам, A/B-verified 2026-10-13); composite/obscure МНН
+  carry a curated English gloss (`data/inn_gloss.yaml`, owner truth) —
+  the model reasons in English and substitutes a plausible compound when
+  it cannot parse a rare token (ментилизовалерат → "menthylsalicylate",
+  2026-10-13).
 - No footnote rule, no self-labelling, no few-shot examples that could leak.
   The prompt stays **silent** about footnotes — no negative instruction
   either: the model has no such instinct to suppress, and naming the behavior

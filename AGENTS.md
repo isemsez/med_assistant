@@ -73,6 +73,11 @@ data/drug_aliases.yaml   owner-curated colloquial aliases for the МНН lookup
                          value = register trade name OR a direct МНН for
                          register holes — e.g. валерьянка, кагоцел; owner
                          truth, never auto-extended)
+data/inn_gloss.yaml      owner-curated English glosses for composite/obscure
+                         register МНН (data/inn_gloss.yaml is appended to the
+                         P.S. — the model reasons in English and confabulates
+                         compounds it cannot parse; owner truth, extended
+                         only on observed confabulations)
 data/abbr2term.yaml      4,506 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
 data/index/              built embedding index (vectors.npy + meta.json with a
