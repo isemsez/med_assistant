@@ -12,6 +12,7 @@ DEFAULTS = {
     "SESSIONS_DB": "data/sessions.sqlite",
     "AUDIT_LOG": "logs/audit.jsonl",
     "CARD_DIR": "data/patient_cards",
+    "DRUGS_DB": "data/drugs.sqlite",
 }
 
 
@@ -43,6 +44,7 @@ CLINREC_DIR = _path("CLINREC_DIR")
 SESSIONS_DB = _path("SESSIONS_DB")
 AUDIT_LOG_PATH = _path("AUDIT_LOG")
 CARD_DIR = _path("CARD_DIR")
+DRUGS_DB = _path("DRUGS_DB")
 
 HISTORY_WINDOW = int(os.environ.get("HISTORY_WINDOW", "6"))
 DISEASE_CAP = int(os.environ.get("DISEASE_CAP", "3"))
@@ -64,6 +66,11 @@ AUTO_PICK_GAP = float(os.environ.get("AUTO_PICK_GAP", "0.05"))
 # Patient cards (owner decision 2026-10-06, architecture.md §9): hand-made
 # *.выписка.md files, per-question prompt context, nothing stored.
 CARD_MAX_CHARS = int(os.environ.get("CARD_MAX_CHARS", "8000"))
+
+# Register-grounded МНН lookup (owner decision 2026-10-12, architecture.md
+# §3[1]): trade names from drugs.sqlite get a «справочно» P.S. + UI hint.
+# A missing DB silently disables the feature; DRUG_PS_MAX caps matches.
+DRUG_PS_MAX = int(os.environ.get("DRUG_PS_MAX", "5"))
 
 ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "2048"))
 LABELER_EXTRACT_MAX_TOKENS = int(os.environ.get("LABELER_EXTRACT_MAX_TOKENS", "200"))

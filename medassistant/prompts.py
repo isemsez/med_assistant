@@ -31,6 +31,19 @@ def card_block(display_name, text):
             "(приложена врачом; учитывай её при ответе):\n\n"
             f"{text.strip()}\n\n(конец выписки)")
 
+
+def drug_block(matches):
+    """Register-grounded МНН note appended after the question (owner
+    decision 2026-10-12, architecture.md §3[1]): matched trade names with
+    their МНН from the ГРЛС register. Reference framing, data only — no
+    instructions. Empty string when nothing usable matched."""
+    lines = [f"«{m['trade']}» — торговое наименование, МНН: {m['inn']}"
+             for m in (matches or []) if m.get("inn")]
+    if not lines:
+        return ""
+    return ("(справочно, из государственного реестра лекарственных средств: "
+            + "; ".join(lines) + ")")
+
 SYSTEM_LABELER_EXTRACT = """Ты — автоматический маркировщик ответов медицинского ассистента.
 Ты НЕ отвечаешь на вопрос врача — ты только определяешь, о каких заболеваниях
 идёт речь в ответе.

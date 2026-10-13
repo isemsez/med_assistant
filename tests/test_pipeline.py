@@ -437,6 +437,57 @@ class TestCardContext(unittest.TestCase):
         self.assertIn("текст", seen["messages"][-1]["content"])
 
 
+class TestDrugContext(unittest.TestCase):
+    MATCHES = [{"trade": "Сорбифер Дурулес",
+                "inn": "железа сульфат + аскорбиновая кислота"}]
+
+    def test_drug_ps_lands_between_question_and_card(self):
+        pipe = make_pipe()
+        msgs = pipe._messages(Q, None, card=("Иванов ИИ", "текст выписки"),
+                              drug=self.MATCHES)
+        content = msgs[-1]["content"]
+        ps = ("(справочно, из государственного реестра лекарственных средств:"
+              " «Сорбифер Дурулес» — торговое наименование, МНН:"
+              " железа сульфат + аскорбиновая кислота)")
+        self.assertEqual(
+            content,
+            f"{Q}\n\n{ps}\n\nВыписка из амбулаторной карты пациента Иванов ИИ"
+            " (приложена врачом; учитывай её при ответе):\n\n"
+            "текст выписки\n\n(конец выписки)")
+
+    def test_drug_ps_without_card(self):
+        pipe = make_pipe()
+        content = pipe._messages(Q, None, drug=self.MATCHES)[-1]["content"]
+        self.assertTrue(content.startswith(f"{Q}\n\n(справочно"))
+        self.assertIn("МНН: железа сульфат + аскорбиновая кислота", content)
+
+    def test_placeholder_only_match_adds_nothing(self):
+        pipe = make_pipe()
+        content = pipe._messages(
+            Q, None, drug=[{"trade": "Рузам концентрат", "inn": None}])[-1]["content"]
+        self.assertEqual(content, Q)
+
+    def test_empty_drug_keeps_plain_question(self):
+        pipe = make_pipe()
+        self.assertEqual(pipe._messages(Q, None, drug=[])[-1]["content"], Q)
+
+    def test_stream_answer_forwards_drug(self):
+        from unittest.mock import patch
+        pipe = make_pipe()
+        pipe.candidate = {"base_url": "http://x/v1", "api_key": "k",
+                          "model": "m", "extra_body": {}}
+        seen = {}
+
+        def fake_stream(endpoint, messages, **kw):
+            seen["messages"] = messages
+            yield {"type": "content", "text": "ok"}
+
+        with patch.object(llm, "chat_stream", fake_stream):
+            events = list(pipe.stream_answer(Q, drug=self.MATCHES))
+        self.assertEqual(events[-1]["text"], "ok")
+        self.assertIn("справочно", seen["messages"][-1]["content"])
+
+
 class TestPromptSilence(unittest.TestCase):
     def test_answerer_prompt_is_silent_about_machinery(self):
         from medassistant import prompts

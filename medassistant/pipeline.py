@@ -99,19 +99,25 @@ class Pipeline:
 
     # -- answerer ---------------------------------------------------------
 
-    def _messages(self, question, history, card=None):
+    def _messages(self, question, history, card=None, drug=None):
         """Answerer prompt; `card=(display_name, text)` appends the
-        patient-card block to the user message (architecture.md §9). The
-        system prompt, history and the stored question are unaffected."""
+        patient-card block to the user message (architecture.md §9), and
+        `drug=[{trade, inn}, ...]` the register-grounded МНН note
+        (architecture.md §3[1]). The system prompt, history and the stored
+        question are unaffected."""
         content = question
+        drug_text = prompts.drug_block(drug)
+        if drug_text:
+            content = f"{question}\n\n{drug_text}"
         if card is not None:
             display_name, text = card
-            content = f"{question}\n\n{prompts.card_block(display_name, text)}"
+            content = f"{content}\n\n{prompts.card_block(display_name, text)}"
         return ([{"role": "system", "content": prompts.SYSTEM_ANSWERER}]
                 + list(history or [])
                 + [{"role": "user", "content": content}])
 
-    def stream_answer(self, question, history=None, max_tokens=None, card=None):
+    def stream_answer(self, question, history=None, max_tokens=None, card=None,
+                      drug=None):
         """Yield answerer events: {"type": "reasoning"|"content", "text": ...},
         plus {"type": "reasoning_reset"} when a degenerate thinking loop was
         aborted and the stream restarted (owner decision 2026-10-06: one
@@ -121,7 +127,8 @@ class Pipeline:
         for attempt in range(1 + config.LOOP_RETRIES):
             try:
                 yield from llm.chat_stream(
-                    self.candidate, self._messages(question, history, card),
+                    self.candidate,
+                    self._messages(question, history, card, drug),
                     max_tokens=max_tokens or config.ANSWERER_MAX_TOKENS,
                     freq_penalty=(config.LOOP_RETRY_FREQ_PENALTY
                                   if attempt else None))
@@ -134,12 +141,13 @@ class Pipeline:
                                    attempt=attempt + 1, error=str(e))
                 yield {"type": "reasoning_reset"}
 
-    def answer(self, question, history=None, max_tokens=None, card=None):
+    def answer(self, question, history=None, max_tokens=None, card=None,
+               drug=None):
         """Non-streaming answer (whole string). Diagnostic probe for budget/
         timeout experiments — the product paths stream via stream_answer."""
         config.require(self.candidate, "CANDIDATE")
         return llm.chat(
-            self.candidate, self._messages(question, history, card),
+            self.candidate, self._messages(question, history, card, drug),
             max_tokens=max_tokens or config.ANSWERER_MAX_TOKENS)
 
     # -- labeler calls ----------------------------------------------------
