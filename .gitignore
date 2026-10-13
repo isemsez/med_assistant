@@ -9,6 +9,8 @@ data/sessions.sqlite
 data/sessions.sqlite-shm
 data/sessions.sqlite-wal
 data/drugs.sqlite
+*grls.xlsx
+
 data/backups/
 logs/
 .pytest_cache/
