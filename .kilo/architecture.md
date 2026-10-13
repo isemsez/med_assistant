@@ -100,6 +100,16 @@ final answer = raw answer + appendix block (local PDF links only)
   was reverted. The plain МНН-only rule answers such questions correctly
   in most runs but still fabricates occasionally (2026-10-11) — residual
   4B flakiness, documented lever: 27B tier via `CANDIDATE_*`.
+  **Register-grounded МНН lookup** (owner decision 2026-10-12): the
+  question is scanned for register trade names (`data/drugs.sqlite`, built
+  by `scripts/grls_to_sqlite.py` from a ГРЛС export; inflection-tolerant
+  matching, capped); each usable match gets a «справочно» P.S. appended to
+  the user message (`prompts.drug_block`, after the question, before the
+  card block) and a transient hint line under the question bubble in the
+  UI (`drug_map` SSE event — never stored, gone after a reload). This
+  coexists with the МНН-only rule: it removes the knowledge gap that
+  caused the fabrications, not the rule. A missing DB silently disables
+  the feature; placeholder register МНН (`~`) matches are audit-only.
 - No footnote rule, no self-labelling, no few-shot examples that could leak.
   The prompt stays **silent** about footnotes — no negative instruction
   either: the model has no such instinct to suppress, and naming the behavior

@@ -59,11 +59,15 @@ doctor may edit it mid-session). Pdf turns ignore the card entirely.
 medassistant/            runtime package (config, llm, loopguard, prompts,
                          abbr, gindex, pipeline, appendix, audit, store,
                          health, stats, canary, regression, cards, cli, server/)
-scripts/                 one-time setup tools (strip_vision_gguf.py)
+scripts/                 one-time setup tools (strip_vision_gguf.py,
+                         grls_to_sqlite.py)
 models/                  Modelfiles (medgemma-cpu, medgemma-labeler, bge-cpu)
                          + .backup.modelfile of the pre-text-only definitions;
                          medgemma1.5-4b-q4km-text-only.gguf source GGUF
 data/docs_meta.json      register metadata, 757 guidelines (copied from gp-eval)
+data/drugs.sqlite        ГРЛС drugs register (built by scripts/grls_to_sqlite.py;
+                         trade name → МНН grounding for the answerer, missing
+                         file = feature silently off)
 data/abbr2term.yaml      4,506 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
 data/index/              built embedding index (vectors.npy + meta.json with a
