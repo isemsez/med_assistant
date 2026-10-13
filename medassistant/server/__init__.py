@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from .. import audit as audit_mod
 from .. import store as store_mod
-from .. import appendix, cards, config, health, llm, stats
+from .. import appendix, cards, config, drugmap, health, llm, stats
 from ..pipeline import load_pipeline, split_pdf_prefix
 from ..store import load_store
 
@@ -46,6 +46,9 @@ def _wire():
     except Exception as e:  # a failed backup must never block the app
         app.state.audit.log("backup_failed", error=str(e))
     app.state.pipe = load_pipeline(audit=app.state.audit)
+    # register-grounded МНН lookup (owner decision 2026-10-12): a missing
+    # drugs.sqlite silently disables the feature
+    app.state.drugmap = drugmap.load()
 
 
 @app.get("/api/health")
@@ -244,11 +247,22 @@ def chat(req: ChatRequest):
 
         parts, reasoning_parts, failed = [], [], False
         t_answer = time.monotonic()
+        # register-grounded trade-name -> МНН matches (owner decision
+        # 2026-10-12): audit all matches, hint/P.S. only those with a real
+        # МНН; the event fires before the first token so the hint is instant
+        drug = (app.state.drugmap.lookup(question, cap=config.DRUG_PS_MAX)
+                if app.state.drugmap is not None else [])
+        if drug:
+            aud.log("drug_map", session_id=sid, matches=drug)
+            usable = [m for m in drug if m["inn"]]
+            if usable:
+                yield _sse("drug_map", {"matches": usable})
         # medgemma's reasoning always starts with a stray "thought\n"; it
         # arrives split across stream deltas, so it is dropped char-wise
         drop = len("thought\n")
         try:
-            for event in pipe.stream_answer(question, history, card=card_ctx):
+            for event in pipe.stream_answer(question, history, card=card_ctx,
+                                            drug=drug):
                 if event["type"] == "reasoning":
                     t = event["text"]
                     if drop:

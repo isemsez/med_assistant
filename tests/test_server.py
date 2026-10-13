@@ -51,6 +51,9 @@ def setUpModule():
     os.environ["CLINREC_DIR"] = str(TMP / "pdf")
     os.environ["DOCS_META"] = str(TMP / "docs_meta.json")
     os.environ["INDEX_DIR"] = str(index_dir)
+    # no drugs.sqlite in TMP: the МНН lookup starts disabled (None) — tests
+    # that want it set app.state.drugmap explicitly
+    os.environ["DRUGS_DB"] = str(TMP / "no-drugs.sqlite")
     cards_dir = TMP / "cards"
     cards_dir.mkdir()
     (cards_dir / "Тестов_ТТ.выписка.md").write_text(
@@ -65,7 +68,7 @@ def setUpModule():
 
 def tearDownModule():
     for k in ("SESSIONS_DB", "AUDIT_LOG", "CLINREC_DIR", "DOCS_META",
-              "INDEX_DIR", "CARD_DIR"):
+              "INDEX_DIR", "CARD_DIR", "DRUGS_DB"):
         os.environ.pop(k, None)
     import medassistant.config
     import medassistant.server
@@ -102,8 +105,8 @@ class FakePipe:
         self.appendix_error = appendix_error
         self.calls = []
 
-    def stream_answer(self, question, history=None, card=None):
-        self.calls.append(("stream", question, list(history or []), card))
+    def stream_answer(self, question, history=None, card=None, drug=None):
+        self.calls.append(("stream", question, list(history or []), card, drug))
         if isinstance(self.answer_events, Exception):
             raise self.answer_events
         yield from self.answer_events
@@ -508,6 +511,68 @@ class TestStatic(Base):
         r = self.client.get("/data/pdf/" + quote(PDF_FILE))
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.content[:8], b"%PDF-1.4")
+
+
+class TestDrugMapHint(Base):
+    """Register-grounded МНН lookup (owner decision 2026-10-12): the SSE
+    event fires before the first token, the P.S. reaches the answerer, the
+    stored question stays plain; placeholder matches are audit-only."""
+
+    def setUp(self):
+        super().setUp()
+        from medassistant.drugmap import DrugMap
+        self.assertIsNone(srv.app.state.drugmap, "TMP has no drugs.sqlite")
+        srv.app.state.drugmap = DrugMap([
+            ("Сорбифер Дурулес", "Железа сульфат+[Аскорбиновая кислота]"),
+            ("Рузам концентрат", "~"),
+        ])
+
+    def tearDown(self):
+        srv.app.state.drugmap = None
+        super().tearDown()
+
+    def test_event_before_tokens_and_ps_passed(self):
+        sid, events = self.chat("Что содержится в сорбифер дурулес")
+        names = [e for e, _ in events]
+        self.assertIn("drug_map", names)
+        self.assertLess(names.index("drug_map"), names.index("reasoning"))
+        payload = dict(events)["drug_map"]
+        self.assertEqual(payload["matches"],
+                         [{"trade": "Сорбифер Дурулес",
+                           "inn": "железа сульфат + аскорбиновая кислота"}])
+        # the answerer got the register matches; the stored question stays plain
+        stream = [c for c in self.pipe.calls if c[0] == "stream"][-1]
+        self.assertEqual(stream[4][0]["trade"], "Сорбифер Дурулес")
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertEqual(msgs[0]["content"], "Что содержится в сорбифер дурулес")
+
+    def test_no_event_without_match(self):
+        sid, events = self.chat("Просто вопрос про ХСН?")
+        self.assertNotIn("drug_map", [e for e, _ in events])
+        stream = [c for c in self.pipe.calls if c[0] == "stream"][-1]
+        self.assertEqual(stream[4], [])
+
+    def test_placeholder_match_audited_without_event(self):
+        sid, events = self.chat("про рузам концентрат")
+        self.assertNotIn("drug_map", [e for e, _ in events])
+        stream = [c for c in self.pipe.calls if c[0] == "stream"][-1]
+        self.assertEqual(stream[4][0]["inn"], None)  # P.S. skipped downstream
+        recs = [json.loads(l) for l in (TMP / "audit.jsonl")
+                .read_text(encoding="utf-8").splitlines()]
+        mapped = [r for r in recs if r["stage"] == "drug_map"]
+        self.assertEqual(mapped[-1]["matches"][0]["trade"], "Рузам концентрат")
+
+    def test_pdf_turn_skips_lookup(self):
+        sid, events = self.chat("pdf сорбифер дурулес")
+        self.assertNotIn("drug_map", [e for e, _ in events])
+        self.assertEqual([c[0] for c in self.pipe.calls], ["appendix"])
+
+    def test_disabled_map_changes_nothing(self):
+        srv.app.state.drugmap = None
+        sid, events = self.chat("Что содержится в сорбифер дурулес")
+        self.assertNotIn("drug_map", [e for e, _ in events])
+        stream = [c for c in self.pipe.calls if c[0] == "stream"][-1]
+        self.assertEqual(stream[4], [])
 
 
 class TestHealthRoute(Base):

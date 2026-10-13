@@ -497,6 +497,15 @@ async function send(question) {
           // degenerate thinking loop aborted upstream; the retry restarts
           // the reasoning from scratch — drop the looped garbage
           if (thinking) thinking.body.textContent = "";
+        } else if (ev.event === "drug_map") {
+          // register-grounded trade-name -> МНН hint under the question
+          // bubble (transient turn metadata: never stored, gone on reload)
+          const hint = document.createElement("div");
+          hint.className = "drug-hint";
+          hint.innerHTML = (data.matches || []).map((m) =>
+            `${esc(m.trade)} → МНН: ${esc(m.inn)}`).join("<br>");
+          wrap.insertBefore(hint, asst);
+          autoScroll();
         } else if (ev.event === "kind" && data.turn === "pdf") {
           // manual pdf turn renders as ONE row: the question bubble is
           // retitled and re-bodied; the assistant bubble never appears
