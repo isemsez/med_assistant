@@ -67,10 +67,11 @@ models/                  Modelfiles (medgemma-cpu, medgemma-labeler, bge-cpu)
 data/docs_meta.json      register metadata, 757 guidelines (copied from gp-eval)
 data/drugs.sqlite        ГРЛС drugs register (built by scripts/grls_to_sqlite.py;
                          trade name → МНН grounding for the answerer, missing
-                         file = feature silently off; inn_en/inn_lat columns
-                         hold per-component English/Latin INNs written by
-                         scripts/inn_to_en.py — the runtime reads them, never
-                         a side file)
+                         file = feature silently off; inn_en/inn_lat/inn_pair
+                         columns hold per-component English/Latin INNs and the
+                         pre-rendered bilingual МНН string written by
+                         scripts/inn_to_en.py — the runtime reads inn_pair,
+                         never a side file)
 data/drug_aliases.yaml   owner-curated colloquial aliases for the МНН lookup
                          (tier 3, fires only when the dict found nothing;
                          value = register trade name OR a direct МНН for
@@ -78,8 +79,9 @@ data/drug_aliases.yaml   owner-curated colloquial aliases for the МНН lookup
                          truth, never auto-extended)
 data/inn_gloss.yaml      owner-curated English glosses for МНН components the
                          WHO list cannot convert (true holes: ментилизовалерат,
-                         салициловая/ацетилсалициловая кислота; applied
-                         per component as fallback after the inn_en column)
+                         фармакопейные соли железа, салицилаты); folded into
+                         the inn_pair column AT BUILD TIME — re-run
+                         scripts/inn_to_en.py after editing it
 data/inn_list_en-lat.txt owner-prepared pairing "english<TAB>latin" of the
                          WHO recommended INN list (through list 95, FIMEA
                          mirror) — the conversion source for

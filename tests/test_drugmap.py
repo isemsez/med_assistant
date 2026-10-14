@@ -31,8 +31,8 @@ ALIASES = {"валерьянка": "Валерианы настойка",  # val
            "кагоцел": "меглюмина акридонацетат"}  # value = direct МНН
 
 
-def dmap(aliases=None, glosses=None):
-    return DrugMap(ROWS, aliases=aliases, glosses=glosses)
+def dmap(aliases=None):
+    return DrugMap(ROWS, aliases=aliases)
 
 
 class TestCleanInn(unittest.TestCase):
@@ -176,69 +176,60 @@ class TestFuzzy(unittest.TestCase):
         self.assertEqual(dmap().lookup("нурофкн дозировка"), [])
 
 
-class TestGlosses(unittest.TestCase):
-    GLOSSES = {"левоментола раствор в ментилизовалерате":
-               "levomenthol in menthyl isovalerate"}
+class TestPairColumn(unittest.TestCase):
+    """Bilingual МНН strings come ready-made from the inn_pair column
+    (scripts/inn_to_en.py); the runtime only reads them."""
 
-    def test_db_gloss_renders_per_component(self):
-        # inn_en column (empty slot for the untranslated железа сульфат):
-        # the paren goes after each component that has an English form
+    def test_pair_column_renders_per_component(self):
         m = DrugMap([("Сорбифер Дурулес", "Железа сульфат+[Аскорбиновая"
-                     " кислота]", " + ascorbic acid")]
+                     " кислота]",
+                     "железа сульфат (ferrous sulfate) + аскорбиновая"
+                     " кислота (ascorbic acid)")]
                     ).lookup("что есть в сорбифере")
         self.assertEqual(m[0]["en"],
-                         "железа сульфат + аскорбиновая кислота"
-                         " (ascorbic acid)")
+                         "железа сульфат (ferrous sulfate) + аскорбиновая"
+                         " кислота (ascorbic acid)")
 
-    def test_curated_fallback_for_who_holes(self):
-        m = DrugMap([("Валидол", "Левоментола раствор в ментилизовалерате")],
-                    glosses=self.GLOSSES).lookup("как действует валидол")
+    def test_mono_pair(self):
+        m = DrugMap([("Валидол", "Левоментола раствор в ментилизовалерате",
+                      "левоментола раствор в ментилизовалерате (levomenthol"
+                      " in menthyl isovalerate)")]).lookup(
+            "как действует валидол")
         self.assertEqual(m[0]["en"],
                          "левоментола раствор в ментилизовалерате"
                          " (levomenthol in menthyl isovalerate)")
 
-    def test_db_and_curated_mixed_composite(self):
-        m = DrugMap([("Загадин плюс", "Загадка+[Аскорбиновая кислота]",
-                      " + ascorbic acid")],
-                    glosses={**self.GLOSSES,
-                            "загадка": "mystery"}).lookup(
-            "состав загадин плюс")
-        self.assertEqual(m[0]["en"],
-                         "загадка (mystery) + аскорбиновая кислота"
-                         " (ascorbic acid)")
-
-    def test_no_translation_no_en(self):
+    def test_no_pair_column_no_en(self):
         m = dmap().lookup("дозировка нурофена")
         self.assertNotIn("en", m[0])
 
-    def test_alias_matches_get_glosses_too(self):
-        glosses = {"валерианы лекарственной корневищ с корнями настойка":
-                       "valerian tincture"}
-        m = dmap(aliases=ALIASES, glosses=glosses).lookup(
-            "валерьянка помогает?")
+    def test_alias_matches_carry_pair_too(self):
+        m = DrugMap([("Валерианы настойка",
+                      "Валерианы лекарственной корневищ с корнями настойка",
+                      "валерианы лекарственной корневищ с корнями настойка"
+                      " (valerian tincture)")],
+                    aliases=ALIASES).lookup("валерьянка помогает?")
         self.assertEqual(m[0]["en"],
                          "валерианы лекарственной корневищ с корнями"
                          " настойка (valerian tincture)")
 
-    def test_load_reads_gloss_file(self):
+    def test_load_reads_pair_column(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "drugs.sqlite"
             con = sqlite3.connect(str(p))
-            con.execute("create table drugs (trade_name text, inn text)")
-            con.execute("insert into drugs values (?, ?)",
-                        ("Валидол", "Левоментола раствор в ментилизовалерате"))
+            con.execute("create table drugs (trade_name text, inn text,"
+                        " inn_pair text)")
+            con.execute("insert into drugs values (?, ?, ?)",
+                        ("Валидол", "Левоментола раствор в ментилизовалерате",
+                         "левоментола раствор в ментилизовалерате"
+                         " (levomenthol in menthyl isovalerate)"))
             con.commit()
             con.close()
-            g = Path(td) / "gloss.yaml"
-            g.write_text(
-                "# gloss\nлевоментола раствор в ментилизовалерате:"
-                " levomenthol in menthyl isovalerate\n", encoding="utf-8")
-            m = load(path=p, aliases_path=Path(td) / "no-aliases.yaml",
-                     gloss_path=g)
+            m = load(path=p, aliases_path=Path(td) / "no-aliases.yaml")
             self.assertEqual(
                 m.lookup("как действует валидол")[0]["en"],
-                "левоментола раствор в ментилизовалерате"
-                " (levomenthol in menthyl isovalerate)")
+                "левоментола раствор в ментилизовалерате (levomenthol"
+                " in menthyl isovalerate)")
 
 
 class TestLoad(unittest.TestCase):
@@ -278,8 +269,7 @@ class TestLoad(unittest.TestCase):
             a = Path(td) / "aliases.yaml"
             a.write_text("# comment\nвалерьянка: Валерианы настойка\n",
                          encoding="utf-8")
-            m = load(path=p, aliases_path=a,
-                     gloss_path=Path(td) / "no-gloss.yaml")
+            m = load(path=p, aliases_path=a)
             hit = m.lookup("валерьянка помогает?")
             self.assertEqual(hit[0]["trade"], "Валерианы настойка")
 
@@ -292,8 +282,7 @@ class TestLoad(unittest.TestCase):
                         ("Кагоцел", "меглюмина акридонацетат"))
             con.commit()
             con.close()
-            m = load(path=p, aliases_path=Path(td) / "nope.yaml",
-                     gloss_path=Path(td) / "no-gloss.yaml")
+            m = load(path=p, aliases_path=Path(td) / "nope.yaml")
             self.assertEqual(m.lookup("кагоцел?"),
                              [{"trade": "Кагоцел",
                                "inn": "меглюмина акридонацетат",

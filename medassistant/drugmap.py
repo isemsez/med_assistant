@@ -95,27 +95,26 @@ def _levenshtein(a, b, cap):
 
 
 class DrugMap:
-    def __init__(self, rows, aliases=None, glosses=None):
-        """rows: register rows (trade_name, inn[, inn_en]) — inn_en is the
-        English composite written by scripts/inn_to_en.py into drugs.sqlite
-        (per component, empty slots for untranslated parts). `aliases`:
-        curated {colloquial: value} map — the value either names a register
-        trade name (resolved through this dict) or is a direct МНН for
-        register holes. `glosses`: curated per-component {ru: english} map
-        for true WHO holes (data/inn_gloss.yaml), the fallback when the
-        DB column has no translation."""
+    def __init__(self, rows, aliases=None):
+        """rows: register rows (trade_name, inn[, inn_pair]) — inn_pair is
+        the pre-rendered bilingual МНН written by scripts/inn_to_en.py
+        into drugs.sqlite («железа сульфат (ferrous sulfate) +
+        аскорбиновая кислота (ascorbic acid)», owner decision 2026-10-14).
+        `aliases`: curated {colloquial: value} map — the value either
+        names a register trade name (resolved through this dict) or is a
+        direct МНН for register holes."""
         groups = {}
         self._db_gloss = {}
         for row in rows:
             trade, inn = row[0], row[1]
-            inn_en = row[2] if len(row) > 2 else None
+            inn_pair = row[2] if len(row) > 2 else None
             if not trade or len(trade) > MAX_NAME_CHARS:
                 continue
             inn = clean_inn(inn)
             if not inn or inn in PLACEHOLDER_INNS:
                 continue  # placeholder-МНН rows are not keyed
-            if inn_en:
-                self._db_gloss[inn] = inn_en.strip()
+            if inn_pair:
+                self._db_gloss[inn] = inn_pair.strip()
             norm = _norm(trade)
             if not norm or norm[0].isdigit():
                 continue  # «1,3-Диэтил…», «9 месяцев Фолиевая кислота»
@@ -135,9 +134,6 @@ class DrugMap:
             a = _norm(alias)
             if len(_word_key(a)) >= KEY_MIN and _norm(value):
                 self._aliases[_word_key(a)] = (a, _norm(value))
-        # curated per-component english glosses for true WHO holes
-        self._glosses = {_norm(k): (v or "").strip()
-                         for k, v in (glosses or {}).items() if _norm(v)}
 
     def __len__(self):
         return sum(len(m) for m, _ in self._groups.values())
@@ -290,27 +286,11 @@ class DrugMap:
         return out
 
     def _glossed(self, inn):
-        """Rendered МНН for the P.S. and the UI: every component with an
-        English form carries it in parentheses right after the Russian
-        name, components without one stay plain (owner decision
-        2026-10-14). DB composite first; the curated gloss file answers
-        per component for true WHO holes. None when nothing translates."""
-        parts = [p.strip() for p in inn.split("+") if p.strip()]
-        if not parts:
-            return None
-        ens = [""] * len(parts)
-        db = self._db_gloss.get(inn)
-        if db:
-            db_parts = [p.strip() for p in db.split("+")]
-            if len(db_parts) == len(parts):
-                ens = db_parts
-        out = []
-        for ru, en in zip(parts, ens):
-            if not en:
-                en = self._glosses.get(_norm(ru)) or ""
-            out.append(f"{ru} ({en})" if en else ru)
-        rendered = " + ".join(out)
-        return rendered if "(" in rendered else None
+        """Pre-rendered bilingual МНН from the register's inn_pair column
+        (scripts/inn_to_en.py builds it: Russian components with English
+        in parentheses after each substance that has one). None when the
+        row has no translation — the plain Russian МНН is used."""
+        return self._db_gloss.get(inn)
 
     def lookup(self, question, cap=DEFAULT_CAP):
         """[{"trade", "inn", ...}, ...] for trade names found in the
@@ -353,16 +333,15 @@ def _load_flat(path):
     return out
 
 
-def load(path=None, aliases_path=None, gloss_path=None):
-    """drugs.sqlite (+ curated alias/gloss files) -> DrugMap; None when
-    the DB is missing (feature silently off). English translations come
-    from the inn_en column (written by scripts/inn_to_en.py); the curated
-    gloss file answers per component for true WHO holes."""
-    if path is None or aliases_path is None or gloss_path is None:
+def load(path=None, aliases_path=None):
+    """drugs.sqlite (+ curated alias file) -> DrugMap; None when the DB is
+    missing (feature silently off). Bilingual МНН strings come from the
+    inn_pair column written by scripts/inn_to_en.py (WHO list + curated
+    glosses folded at build time)."""
+    if path is None or aliases_path is None:
         from . import config
         path = path or config.DRUGS_DB
         aliases_path = aliases_path or config.DRUG_ALIASES_PATH
-        gloss_path = gloss_path or config.INN_GLOSS_PATH
     p = Path(path)
     if not p.exists():
         return None
@@ -370,10 +349,9 @@ def load(path=None, aliases_path=None, gloss_path=None):
     try:
         try:
             rows = con.execute(
-                "select trade_name, inn, inn_en from drugs").fetchall()
+                "select trade_name, inn, inn_pair from drugs").fetchall()
         except sqlite3.OperationalError:  # pre-migration DB, no column yet
             rows = con.execute("select trade_name, inn from drugs").fetchall()
     finally:
         con.close()
-    return DrugMap(rows, aliases=_load_flat(Path(aliases_path)),
-                   glosses=_load_flat(Path(gloss_path)))
+    return DrugMap(rows, aliases=_load_flat(Path(aliases_path)))

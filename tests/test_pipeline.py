@@ -441,8 +441,8 @@ class TestDrugContext(unittest.TestCase):
     MATCHES = [{"trade": "Сорбифер Дурулес",
                 "inn": "железа сульфат + аскорбиновая кислота",
                 "token": "сорбифер",
-                "en": "железа сульфат + аскорбиновая кислота"
-                      " (ascorbic acid)"}]
+                "en": "железа сульфат (ferrous sulfate) + аскорбиновая"
+                      " кислота (ascorbic acid)"}]
 
     def test_drug_ps_lands_between_question_and_card(self):
         pipe = make_pipe()
@@ -451,7 +451,8 @@ class TestDrugContext(unittest.TestCase):
         content = msgs[-1]["content"]
         ps = ("(справочно, из государственного реестра лекарственных средств:\n"
               "«сорбифер» — торговое наименование «Сорбифер Дурулес», МНН:"
-              " железа сульфат + аскорбиновая кислота (ascorbic acid))")
+              " железа сульфат (ferrous sulfate) + аскорбиновая кислота"
+              " (ascorbic acid))")
         self.assertEqual(
             content,
             f"{Q}\n\n{ps}\n\nВыписка из амбулаторной карты пациента Иванов ИИ"
@@ -469,7 +470,8 @@ class TestDrugContext(unittest.TestCase):
         self.assertIn(
             "(справочно, из государственного реестра лекарственных средств:\n"
             "«сорбифер» — торговое наименование «Сорбифер Дурулес», МНН:"
-            " железа сульфат + аскорбиновая кислота (ascorbic acid);\n"
+            " железа сульфат (ferrous sulfate) + аскорбиновая кислота"
+            " (ascorbic acid);\n"
             "«валерьянки» — разговорное название, «Валерианы настойка»"
             " — торговое наименование, МНН: валерианы лекарственной"
             " корневищ с корнями настойка;\n"
@@ -480,7 +482,9 @@ class TestDrugContext(unittest.TestCase):
         pipe = make_pipe()
         content = pipe._messages(Q, None, drug=self.MATCHES)[-1]["content"]
         self.assertTrue(content.startswith(f"{Q}\n\n(справочно"))
-        self.assertIn("МНН: железа сульфат + аскорбиновая кислота", content)
+        self.assertIn(
+            "МНН: железа сульфат (ferrous sulfate) + аскорбиновая кислота"
+            " (ascorbic acid)", content)
 
     def test_placeholder_only_match_adds_nothing(self):
         pipe = make_pipe()

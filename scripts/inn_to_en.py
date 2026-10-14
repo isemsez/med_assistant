@@ -7,18 +7,27 @@ forms, so conversion is mechanical: transliterate back to Latin,
 canonicalize both sides (Russian drops h, writes кс/ц/и where Latin has
 x/c/y; salt and acid grammar forms differ), and match token sequences.
 
-Output: columns `inn_en` / `inn_lat` in the drugs table (per row, same
-value for all rows sharing an МНН). Compound МНН («x + y») translate
-PER COMPONENT: each part is translated independently, parts that fail
-stay untranslated (empty slot in the composite), a row where nothing
-translated gets NULL — the runtime renderer puts the English in
-parentheses after each substance name it has one for.
+Output: columns in the drugs table (per row, same value for all rows
+sharing an МНН):
+  inn_en   — English composite (« + »-joined, empty slots where a
+             component has no translation)
+  inn_lat  — Latin composite from the WHO pairs (same shape)
+  inn_pair — the pre-rendered bilingual string used verbatim by the web
+             UI and the answerer P.S.: each substance in Russian with
+             its English in parentheses right after it when one exists
+             («железа сульфат (ferrous sulfate) + аскорбиновая кислота
+             (ascorbic acid)»; monos: «дексаметазон (dexamethasone)»).
+             NULL when nothing translates — the runtime then shows the
+             plain Russian МНН.
+
+The curated data/inn_gloss.yaml (owner truth: standard English for
+substances the WHO list lacks — pharmacopoeia salts etc.) is folded in
+at BUILD time: re-run this script after editing it.
 
 Trust policy (owner decision 2026-10-14): only EXACT rule matches are
 written; the distance-1 tier is reported (--report) but never applied
 (a missing gloss costs nothing; a wrong gloss is the hallucination we
-are fighting). True WHO holes (ментилизовалерат, железа сульфат) belong
-to the curated data/inn_gloss.yaml, applied per component at runtime.
+are fighting).
 
     python scripts/inn_to_en.py             # alter + update drugs.sqlite
     python scripts/inn_to_en.py --report    # stats only, no writes
@@ -36,7 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from medassistant import config  # noqa: E402
 from medassistant.drugmap import PLACEHOLDER_INNS, clean_inn  # noqa: E402
 
-RULES_VERSION = "2"
+RULES_VERSION = "3"
 
 TRANS = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
@@ -55,6 +64,16 @@ SALT = {
     "magnicum": "magni", "magnii": "magni", "магния": "magni",
     "hydrochloridum": "hcl", "hydrochlorid": "hcl", "гидрохлорид": "hcl",
     "acidum": "acid", "acid": "acid", "кислота": "acid", "кислоты": "acid",
+}
+
+
+# closed pharmaceutical vocabulary the WHO list cannot derive (element
+# and salt words RU pharmaceutics calques differently); owner-checkable
+CURATED_WORDS = {
+    "железа": "iron", "цинка": "zinc", "меди": "copper",
+    "марганца": "manganese", "натрия": "sodium", "калия": "potassium",
+    "кальция": "calcium", "магния": "magnesium", "раствор": "solution",
+    "таблетки": "tablets", "капсулы": "capsules",
 }
 
 
@@ -120,11 +139,44 @@ def canon_ru_variants(name):
     return {_canon(s) for s in seqs}
 
 
+def _en_stem(tok):
+    """canon of an English word with the trailing -e stripped
+    (fumarate/fumaratum both -> fumarat)."""
+    c = _canon(tok)
+    return c[:-1] if c.endswith("e") and len(c) > 4 else c
+
+
+def _word_map(pairs):
+    """Word-level ru->en dictionary DERIVED from the WHO pairs: when a
+    pair has equal token counts and every latin/en token aligns by canon
+    (fumaratum<->fumarate, hydroxidum<->hydroxide), each latin stem votes
+    for its English word. Conflicting stems are dropped. Lookup keys are
+    latin canon stems, matched from Russian words via translit variants."""
+    votes = defaultdict(lambda: defaultdict(int))
+    for en, latin in pairs:
+        la, ent = _tokens(latin), _tokens(en)
+        if len(la) != len(ent) or not la:
+            continue
+        aligned = []
+        for lt, et in zip(la, ent):
+            stem = canon_lat(lt)
+            if not stem or stem != _en_stem(et):
+                aligned = None
+                break
+            aligned.append((stem, et))
+        if aligned:
+            for stem, et in aligned:
+                votes[stem][et] += 1
+    return {stem: next(iter(vs))
+            for stem, vs in votes.items() if len(vs) == 1}
+
+
 class InnConverter:
     """WHO paired list -> (en, latin) for RU МНН components (exact tier)."""
 
     def __init__(self, pairs):
         self.pairs = pairs
+        self.words = _word_map(pairs)
         # canonical token sequence -> {en: latin}
         self.index = defaultdict(dict)
         # acids: adjective stem candidates for the RU «<adj> кислота» form
@@ -179,10 +231,34 @@ class InnConverter:
             return best[1][0]
         return None
 
+    def _compose(self, ru):
+        """Word-level fallback for components the WHO list lacks entirely
+        (pharmacopoeia salts: «железа сульфат» -> «iron sulfate»): every
+        meaningful word (>= 4 chars) must translate — via the WHO-derived
+        word map or the curated closed vocabulary — else no gloss."""
+        words = _tokens(ru)
+        meaningful = [w for w in words if len(w) >= 4]
+        if not meaningful:
+            return None
+        out = []
+        for w in words:
+            if len(w) < 4:
+                continue  # glue: «в», «и», «(III)» markers
+            en = CURATED_WORDS.get(w)
+            if not en:
+                for c in canon_ru_variants(w):
+                    en = self.words.get(c)
+                    if en:
+                        break
+            if not en:
+                return None
+            out.append(en)
+        return (" ".join(out), None) if out else None
+
     def convert_component(self, ru):
-        """One «+»-free МНН component -> (en, latin) or None. Full-name
-        match only — no partial-word fallback (a partial gloss of a
-        descriptive phrase is a wrong gloss)."""
+        """One «+»-free МНН component -> (en, latin) or None. Whole-name
+        WHO match first, then acid stems, then word-level composition for
+        pharmacopoeia salts — never a partial-word gloss of a phrase."""
         ru = ru.strip()
         if not ru:
             return None
@@ -190,7 +266,10 @@ class InnConverter:
             hit = self._exact(seq)
             if hit:
                 return hit
-        return self._match_acid(ru)
+        hit = self._match_acid(ru)
+        if hit:
+            return hit
+        return self._compose(ru)
 
     def convert(self, ru_inn):
         """Full register МНН (may be «x + y») -> (en_composite,
@@ -245,15 +324,28 @@ def build(pairs, inns):
     return out, stats
 
 
-def apply_db(pairs, db_path):
-    """Add inn_en/inn_lat to the drugs table (idempotent) and fill them
-    per register МНН. Returns (mapping keyed by cleaned МНН, stats)."""
+def _render_pair(parts, en_parts):
+    """«ru (en) + ru» per component; None when no component translates."""
+    out = [f"{ru} ({en})" if en else ru
+           for ru, en in zip(parts, en_parts)]
+    rendered = " + ".join(out)
+    return rendered if "(" in rendered else None
+
+
+def apply_db(pairs, db_path, glosses=None):
+    """Add inn_en/inn_lat/inn_pair to the drugs table (idempotent) and
+    fill them per register МНН; curated glosses (per-component ru->en)
+    fill WHO holes at build time. Returns (mapping keyed by cleaned МНН,
+    stats)."""
     conv = InnConverter(pairs)
+    glosses = {k.strip().lower(): (v or "").strip()
+               for k, v in (glosses or {}).items() if v and v.strip()}
     con = sqlite3.connect(str(db_path))
     updates = []
+    gloss_filled = 0
     try:
         cols = {r[1] for r in con.execute("PRAGMA table_info(drugs)")}
-        for col in ("inn_en", "inn_lat"):
+        for col in ("inn_en", "inn_lat", "inn_pair"):
             if col not in cols:
                 con.execute(f"ALTER TABLE drugs ADD COLUMN {col} TEXT")
         # UPDATE matches the RAW register inn; conversion uses cleaned
@@ -261,23 +353,43 @@ def apply_db(pairs, db_path):
             inn = clean_inn(raw)
             if not inn or inn in PLACEHOLDER_INNS:
                 continue
-            en, lat = conv.convert(inn)
-            if en:
-                updates.append((en, lat, raw))
+            parts = [p.strip() for p in inn.split("+") if p.strip()]
+            en_parts, lat_parts = [], []
+            for p in parts:
+                en = glosses.get(p, "")   # owner truth beats derivation
+                lat = ""
+                if not en:
+                    hit = conv.convert_component(p)
+                    if hit:
+                        en, lat = hit[0], hit[1] or ""
+                else:
+                    gloss_filled += 1
+                en_parts.append(en)
+                lat_parts.append(lat)
+            if not any(en_parts):
+                continue
+            inn_en = " + ".join(en_parts)
+            inn_lat = " + ".join(lat_parts) if any(lat_parts) else None
+            inn_pair = _render_pair(parts, en_parts)
+            updates.append((inn_en, inn_lat, inn_pair, raw))
         con.executemany(
-            "UPDATE drugs SET inn_en=?, inn_lat=? WHERE inn=?", updates)
+            "UPDATE drugs SET inn_en=?, inn_lat=?, inn_pair=? WHERE inn=?",
+            updates)
         con.commit()
     finally:
         con.close()
-    mapping = {clean_inn(raw): (en, lat) for en, lat, raw in updates}
+    mapping = {clean_inn(raw): (en, pair)
+               for en, _lat, pair, raw in updates}
     full = sum(1 for en, _ in mapping.values()
                if "" not in en.split(" + "))
-    partial = len(mapping) - full
+    n_inns = len(register_inns(db_path))
     stats = {
-        "register_inns": len(register_inns(db_path)),
+        "register_inns": n_inns,
+        "rows_with_translation": len(mapping),
         "fully_translated": full,
-        "partially_translated": partial,
-        "untranslated": len(register_inns(db_path)) - len(mapping),
+        "partially_translated": len(mapping) - full,
+        "gloss_filled_components": gloss_filled,
+        "untranslated": n_inns - len(mapping),
         "rules_version": RULES_VERSION,
     }
     return mapping, stats
@@ -297,10 +409,14 @@ def main(argv=None):
     digest = hashlib.sha1(src.read_bytes()).hexdigest()[:12]
     print(f"source: {src.name} sha1={digest} pairs={len(pairs)}")
 
+    from medassistant.drugmap import _load_flat
+    glosses = _load_flat(Path(config.INN_GLOSS_PATH))
+    print(f"curated glosses: {len(glosses)}")
+
     if args.report:
         mapping, stats = build(pairs, register_inns(args.drugs))
     else:
-        mapping, stats = apply_db(pairs, args.drugs)
+        mapping, stats = apply_db(pairs, args.drugs, glosses=glosses)
     for k, v in stats.items():
         print(f"  {k}: {v}")
 
@@ -308,10 +424,11 @@ def main(argv=None):
             "аскорбиновая кислота",
             "железа сульфат + аскорбиновая кислота"]
     for s in spot:
-        en, lat = mapping.get(s, (None, None))
-        print(f"  spot {s!r}: en={en!r} lat={lat!r}")
+        en, pair = mapping.get(s, (None, None))
+        print(f"  spot {s!r}: en={en!r} pair={pair!r}")
     if not args.report:
-        print(f"-> updated {args.drugs} (columns inn_en, inn_lat)")
+        print(f"-> updated {args.drugs} (columns inn_en, inn_lat,"
+              " inn_pair)")
 
 
 if __name__ == "__main__":
