@@ -170,16 +170,44 @@ if (`$up) { Start-Process 'http://127.0.0.1:$port' }
         -ArgumentList '-NoProfile', '-Command', $cmd
 }
 
+function Start-DetachedHidden([string]$exe, [string]$psArgList, [string]$stdout, [string]$stderr, [string]$workdir) {
+    # Start a long-lived server so it is NEVER a live child of this script:
+    # a short-lived hidden helper pwsh Start-Process'es the real server
+    # (hidden + file-redirected, env inherited through the helper) and
+    # exits immediately with the server's PID as its exit code. Direct
+    # Start-Process children of this script made agent/CI shells hang on
+    # the start call or kill the "leaked" servers at cleanup
+    # (2026-10-14); the helper breaks the parent link before this script
+    # returns, so no live descendant remains to track. Returns the PID
+    # (0 on failure).
+    $q = { param($s) "'" + ($s -replace "'", "''") + "'" }
+    $inner = @"
+`$ErrorActionPreference = 'Stop'
+try {
+    `$p = Start-Process $($q.Invoke($exe)) -ArgumentList $($psArgList) -WindowStyle Hidden -PassThru -WorkingDirectory $($q.Invoke($workdir)) -RedirectStandardOutput $($q.Invoke($stdout)) -RedirectStandardError $($q.Invoke($stderr))
+    exit `$p.Id
+}
+catch { exit 0 }
+"@
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
+    $helper = Start-Process (Get-Process -Id $PID).Path -WindowStyle Hidden `
+        -ArgumentList "-NoProfile", "-EncodedCommand", $b64 -PassThru
+    if (-not $helper.WaitForExit(15000)) {
+        Write-Warning "detached launcher helper did not exit"
+        Stop-Process -Id $helper.Id -Force -ErrorAction SilentlyContinue
+        return 0
+    }
+    return [int]$helper.ExitCode
+}
+
 function Start-OllamaHidden([string]$inst) {
-    # windowless with logs: Windows Terminal (default host) ignores
-    # -WindowStyle Minimized and pops a foreground window, so redirect
-    # both streams to files instead (separate files: Start-Process
-    # cannot share one for stdout+stderr)
-    $proc = Start-Process $ollamaExe -ArgumentList "serve" -WindowStyle Hidden `
-        -RedirectStandardOutput "$root\logs\ollama-$inst-$bootStamp.out.log" `
-        -RedirectStandardError "$root\logs\ollama-$inst-$bootStamp.err.log" -PassThru
-    Remove-OldBootLogs "ollama-$inst"
-    return $proc
+    # windowless with logs (separate files: Start-Process cannot share
+    # one for stdout+stderr), fully detached from this script's tree
+    $procId = Start-DetachedHidden $ollamaExe "@('serve')" `
+        "$root\logs\ollama-$inst-$bootStamp.out.log" `
+        "$root\logs\ollama-$inst-$bootStamp.err.log" "$root"
+    if ($procId -gt 0) { Remove-OldBootLogs "ollama-$inst" }
+    return $procId
 }
 
 function Remove-OldBootLogs([string]$prefix, [int]$keep = 5) {
@@ -289,10 +317,11 @@ try {
     #    inherit OLLAMA_HOST=:11435.
     if (Test-PortOpen 11434) { "main Ollama :11434 already up" }
     else {
-        $proc = Start-OllamaHidden "main"
+        $procId = Start-OllamaHidden "main"
+        if ($procId -le 0) { Quit 1 }
         if (-not (Wait-PortOpen 11434 -NoQuit)) {
-            Stop-Children $proc.Id $ollamaDir
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Stop-Children $procId $ollamaDir
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
             Quit 1
         }
         "main Ollama    :11434 started"
@@ -306,10 +335,11 @@ try {
         $env:OLLAMA_HOST = "127.0.0.1:11435"
         $env:OLLAMA_VULKAN = "true"
         $env:OLLAMA_IGPU_ENABLE = "1"
-        $proc = Start-OllamaHidden "labeler"
+        $procId = Start-OllamaHidden "labeler"
+        if ($procId -le 0) { Quit 1 }
         if (-not (Wait-PortOpen 11435 -NoQuit)) {
-            Stop-Children $proc.Id $ollamaDir
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Stop-Children $procId $ollamaDir
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
             Quit 1
         }
         "labeler Ollama :11435 started"
@@ -353,15 +383,14 @@ try {
         finally { Pop-Location }
     }
     else {
-        $proc = Start-Process $py `
-            -ArgumentList "-m","uvicorn","medassistant.server:app","--host","127.0.0.1","--port",$webPort `
-            -WorkingDirectory $root -WindowStyle Hidden `
-            -RedirectStandardOutput "$root\logs\web-$bootStamp.out.log" `
-            -RedirectStandardError "$root\logs\web-$bootStamp.err.log" -PassThru
+        $procId = Start-DetachedHidden $py `
+            "@('-m','uvicorn','medassistant.server:app','--host','127.0.0.1','--port','$webPort')" `
+            "$root\logs\web-$bootStamp.out.log" "$root\logs\web-$bootStamp.err.log" $root
+        if ($procId -le 0) { Quit 1 }
         Remove-OldBootLogs "web"
         if (-not (Wait-PortOpen $webPort -NoQuit)) {
-            Stop-Children $proc.Id $venvDir
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Stop-Children $procId $venvDir
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
             Quit 1
         }
         Start-Process "http://127.0.0.1:$webPort"
