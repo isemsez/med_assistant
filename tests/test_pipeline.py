@@ -391,13 +391,13 @@ class TestCardContext(unittest.TestCase):
 
     def test_card_block_lands_in_user_message(self):
         pipe = make_pipe()
-        msgs = pipe._messages(Q, None, card=("Иванов ИИ", "текст выписки"))
+        msgs = pipe._messages(Q, None, card=("Иванов ИИ", "текст карты"))
         self.assertEqual(msgs[0]["role"], "system")
         self.assertEqual(msgs[-1]["role"], "user")
         content = msgs[-1]["content"]
         self.assertTrue(content.startswith(
-            f"{Q}\n\nВыписка из амбулаторной карты пациента Иванов ИИ"))
-        self.assertIn("текст выписки", content)
+            f"{Q}\n\nАмбулаторная карта пациента Иванов ИИ"))
+        self.assertIn("текст карты", content)
 
     def test_no_card_keeps_plain_question(self):
         pipe = make_pipe()
@@ -419,7 +419,7 @@ class TestCardContext(unittest.TestCase):
             events = list(pipe.stream_answer(Q, card=("Иванов ИИ", "текст")))
         self.assertEqual(events[-1]["text"], "ok")
         self.assertTrue(seen["messages"][-1]["content"].startswith(
-            f"{Q}\n\nВыписка"))
+            f"{Q}\n\nАмбулаторная карта"))
 
     def test_answer_forwards_card(self):
         from unittest.mock import patch
@@ -446,7 +446,7 @@ class TestDrugContext(unittest.TestCase):
 
     def test_drug_ps_lands_between_question_and_card(self):
         pipe = make_pipe()
-        msgs = pipe._messages(Q, None, card=("Иванов ИИ", "текст выписки"),
+        msgs = pipe._messages(Q, None, card=("Иванов ИИ", "текст карты"),
                               drug=self.MATCHES)
         content = msgs[-1]["content"]
         ps = ("(справочно, из государственного реестра лекарственных средств:\n"
@@ -455,9 +455,9 @@ class TestDrugContext(unittest.TestCase):
               " (ascorbic acid))")
         self.assertEqual(
             content,
-            f"{Q}\n\n{ps}\n\nВыписка из амбулаторной карты пациента Иванов ИИ"
+            f"{Q}\n\n{ps}\n\nАмбулаторная карта пациента Иванов ИИ"
             " (приложена врачом; учитывай её при ответе):\n\n"
-            "текст выписки\n\n(конец выписки)")
+            "текст карты\n\n(конец карты)")
 
     def test_drug_ps_one_line_per_match_and_alias_via(self):
         pipe = make_pipe()

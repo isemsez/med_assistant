@@ -68,7 +68,7 @@ AUTO_PICK_MIN = float(os.environ.get("AUTO_PICK_MIN", "0.80"))
 AUTO_PICK_GAP = float(os.environ.get("AUTO_PICK_GAP", "0.05"))
 
 # Patient cards (owner decision 2026-10-06, architecture.md §9): hand-made
-# *.выписка.md files, per-question prompt context, nothing stored.
+# *.амбулаторная_карта.md files, per-question prompt context, nothing stored.
 CARD_MAX_CHARS = int(os.environ.get("CARD_MAX_CHARS", "8000"))
 
 # Register-grounded МНН lookup (owner decision 2026-10-12, architecture.md

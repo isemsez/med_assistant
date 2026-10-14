@@ -29,8 +29,8 @@ class TestAskCard(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
-        (self.dir / "Тестов_ТТ.выписка.md").write_text(
-            "текст выписки", encoding="utf-8")
+        (self.dir / "Тестов_ТТ.амбулаторная_карта.md").write_text(
+            "текст карты", encoding="utf-8")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -46,12 +46,12 @@ class TestAskCard(unittest.TestCase):
 
     def test_filename_in_card_dir(self):
         with mock.patch.object(cards.config, "CARD_DIR", self.dir):
-            pipe = self._ask("--card", "Тестов_ТТ.выписка.md")
-        self.assertEqual(pipe.calls[0][3], ("Тестов ТТ", "текст выписки"))
+            pipe = self._ask("--card", "Тестов_ТТ.амбулаторная_карта.md")
+        self.assertEqual(pipe.calls[0][3], ("Тестов ТТ", "текст карты"))
 
     def test_direct_path(self):
-        pipe = self._ask("--card", str(self.dir / "Тестов_ТТ.выписка.md"))
-        self.assertEqual(pipe.calls[0][3], ("Тестов ТТ", "текст выписки"))
+        pipe = self._ask("--card", str(self.dir / "Тестов_ТТ.амбулаторная_карта.md"))
+        self.assertEqual(pipe.calls[0][3], ("Тестов ТТ", "текст карты"))
 
     def test_no_card_by_default(self):
         pipe = self._ask()
@@ -60,7 +60,7 @@ class TestAskCard(unittest.TestCase):
     def test_bad_card_exits_2(self):
         with mock.patch.object(cards.config, "CARD_DIR", self.dir):
             with self.assertRaises(SystemExit):
-                self._ask("--card", "ghost.выписка.md")
+                self._ask("--card", "ghost.амбулаторная_карта.md")
 
     def test_pdf_turn_ignores_card(self):
         pipe = FakePipe()
@@ -70,7 +70,7 @@ class TestAskCard(unittest.TestCase):
              mock.patch.object(cli.drugmap, "load", return_value=None), \
              redirect_stdout(io.StringIO()), redirect_stderr(err):
             cli.main(["ask", "--question", "pdf ХСН",
-                      "--card", "ghost.выписка.md"])
+                      "--card", "ghost.амбулаторная_карта.md"])
         # no stream call, no validation failure — the card was dropped silently
         self.assertEqual([c[0] for c in pipe.calls], ["appendix"])
         self.assertIn("не используется", err.getvalue())

@@ -1,22 +1,19 @@
 """Patient cards (амбулаторные карты) — example-only per-question prompt
-context (architecture.md §9, owner decision 2026-10-06).
+context (architecture.md §9, owner decision 2026-10-06; the full chart as
+the attachable card is the owner decision 2026-10-14).
 
-A card is a hand-made ``*.выписка.md`` file in CARD_DIR. The physician picks
-one in the UI; its text is appended to the answerer's user message for that
-question only. Nothing is stored — the stored user message stays the plain
-question, and the card text appears only in the LLM call. Shared by the
-server and the CLI so both validate identically.
-
-Sibling ``*.амбулаторная_карта.md`` files are source charts — provenance for
-the extracts, never attachable on this (4B) tier — and are ignored here by
-design (the glob and the suffix check skip them).
+A card is a hand-made ``*.амбулаторная_карта.md`` file in CARD_DIR. The
+physician picks one in the UI; its text is appended to the answerer's user
+message for that question only. Nothing is stored — the stored user message
+stays the plain question, and the card text appears only in the LLM call.
+Shared by the server and the CLI so both validate identically.
 """
 
 from pathlib import Path
 
 from . import config
 
-SUFFIX = ".выписка.md"
+SUFFIX = ".амбулаторная_карта.md"
 
 
 class CardError(ValueError):
@@ -24,7 +21,7 @@ class CardError(ValueError):
 
 
 def display_name(filename):
-    """'Иванов_ИИ.выписка.md' -> 'Иванов ИИ' (suffix off, underscores → spaces)."""
+    """'Иванов_ИИ.амбулаторная_карта.md' -> 'Иванов ИИ' (suffix off, underscores → spaces)."""
     return filename[: -len(SUFFIX)].replace("_", " ")
 
 
@@ -57,7 +54,7 @@ def _read_checked(path, label, max_chars):
     if len(text) > limit:
         raise CardError(
             f"Карта пациента «{label}» слишком велика: {len(text)} символов "
-            f"(максимум {limit}). Сократите выписку.")
+            f"(максимум {limit}). Сократите карту.")
     return text
 
 

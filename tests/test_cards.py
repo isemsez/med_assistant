@@ -9,7 +9,7 @@ from pathlib import Path
 from medassistant import cards, config
 
 
-def write_card(d, name, text="текст выписки"):
+def write_card(d, name, text="текст карты"):
     p = Path(d) / name
     p.write_text(text, encoding="utf-8")
     return p
@@ -24,14 +24,14 @@ class TestListCards(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_sorted_by_display_name(self):
-        write_card(self.dir, "Бб_Бб.выписка.md")
-        write_card(self.dir, "Аа_Аа.выписка.md")
+        write_card(self.dir, "Бб_Бб.амбулаторная_карта.md")
+        write_card(self.dir, "Аа_Аа.амбулаторная_карта.md")
         write_card(self.dir, "непрочитанный.md")  # wrong suffix -> skipped
         (self.dir / "sub").mkdir()
-        write_card(self.dir / "sub", "Вв_Вв.выписка.md")  # subdirs not scanned
+        write_card(self.dir / "sub", "Вв_Вв.амбулаторная_карта.md")  # subdirs not scanned
         listed = cards.list_cards(self.dir)
         self.assertEqual([c["file"] for c in listed],
-                         ["Аа_Аа.выписка.md", "Бб_Бб.выписка.md"])
+                         ["Аа_Аа.амбулаторная_карта.md", "Бб_Бб.амбулаторная_карта.md"])
         self.assertEqual([c["name"] for c in listed], ["Аа Аа", "Бб Бб"])
         self.assertGreater(listed[0]["size"], 0)
         self.assertIsInstance(listed[0]["mtime"], int)
@@ -44,25 +44,25 @@ class TestLoadCard(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
-        write_card(self.dir, "Тестов_ТТ.выписка.md", "текст выписки")
+        write_card(self.dir, "Тестов_ТТ.амбулаторная_карта.md", "текст карты")
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def test_happy_path(self):
-        name, text = cards.load_card("Тестов_ТТ.выписка.md", card_dir=self.dir)
+        name, text = cards.load_card("Тестов_ТТ.амбулаторная_карта.md", card_dir=self.dir)
         self.assertEqual(name, "Тестов ТТ")
-        self.assertEqual(text, "текст выписки")
+        self.assertEqual(text, "текст карты")
 
     def test_reread_fresh_every_call(self):
-        cards.load_card("Тестов_ТТ.выписка.md", card_dir=self.dir)
-        write_card(self.dir, "Тестов_ТТ.выписка.md", "новый текст")
-        _, text = cards.load_card("Тестов_ТТ.выписка.md", card_dir=self.dir)
+        cards.load_card("Тестов_ТТ.амбулаторная_карта.md", card_dir=self.dir)
+        write_card(self.dir, "Тестов_ТТ.амбулаторная_карта.md", "новый текст")
+        _, text = cards.load_card("Тестов_ТТ.амбулаторная_карта.md", card_dir=self.dir)
         self.assertEqual(text, "новый текст")
 
     def test_traversal_rejected(self):
-        for bad in ("..\\evil.выписка.md", "../evil.выписка.md",
-                    "sub/evil.выписка.md", "..", "."):
+        for bad in ("..\\evil.амбулаторная_карта.md", "../evil.амбулаторная_карта.md",
+                    "sub/evil.амбулаторная_карта.md", "..", "."):
             with self.assertRaises(cards.CardError, msg=bad):
                 cards.load_card(bad, card_dir=self.dir)
 
@@ -72,59 +72,45 @@ class TestLoadCard(unittest.TestCase):
 
     def test_missing_file_rejected(self):
         with self.assertRaises(cards.CardError):
-            cards.load_card("Нет_такого.выписка.md", card_dir=self.dir)
+            cards.load_card("Нет_такого.амбулаторная_карта.md", card_dir=self.dir)
 
     def test_oversize_rejected(self):
         with self.assertRaises(cards.CardError):
-            cards.load_card("Тестов_ТТ.выписка.md", card_dir=self.dir,
+            cards.load_card("Тестов_ТТ.амбулаторная_карта.md", card_dir=self.dir,
                             max_chars=5)
 
     def test_non_utf8_rejected(self):
-        (self.dir / "Бинарная_ББ.выписка.md").write_bytes(b"\xff\xfe\x00bin")
+        (self.dir / "Бинарная_ББ.амбулаторная_карта.md").write_bytes(b"\xff\xfe\x00bin")
         with self.assertRaises(cards.CardError):
-            cards.load_card("Бинарная_ББ.выписка.md", card_dir=self.dir)
+            cards.load_card("Бинарная_ББ.амбулаторная_карта.md", card_dir=self.dir)
 
     def test_load_card_path_same_rules(self):
-        name, text = cards.load_card_path(self.dir / "Тестов_ТТ.выписка.md")
-        self.assertEqual((name, text), ("Тестов ТТ", "текст выписки"))
+        name, text = cards.load_card_path(self.dir / "Тестов_ТТ.амбулаторная_карта.md")
+        self.assertEqual((name, text), ("Тестов ТТ", "текст карты"))
         with self.assertRaises(cards.CardError):
             cards.load_card_path(self.dir / "нет.md")
 
 
-SOURCE_SUFFIX = ".амбулаторная_карта.md"
-SECTIONS = ("## Диагнозы", "## Препараты (МНН)", "## Аллергии",
-            "## Ключевые показатели", "## Жалобы")
+CHART_HEADER = "# Амбулаторная карта: "
+SECTIONS = ("Титульный лист", "Лист уточнённых диагнозов", "Записи приёмов")
 
 
 class TestShippedExamples(unittest.TestCase):
     """The shipped demo set is enumerated dynamically — no hardcoded names
-    to go stale when the demo patients are regenerated (карта + выписка
-    pairs, generator prompt in data/patient_cards/)."""
+    to go stale when the demo patients are regenerated (full амбулаторные
+    карты are the attachable cards, owner decision 2026-10-14)."""
 
-    def test_cards_ship_within_limit_with_sections_and_source_chart(self):
+    def test_cards_ship_within_limit_with_chart_sections(self):
         listed = cards.list_cards(config.CARD_DIR)
         self.assertGreaterEqual(
             len(listed), 2, "the demo card set must not be empty")
         for c in listed:
             text = (config.CARD_DIR / c["file"]).read_text(encoding="utf-8")
-            self.assertGreater(len(text.strip()), 0, c["file"])
+            self.assertTrue(text.startswith(CHART_HEADER), c["file"])
             self.assertLessEqual(
                 len(text), config.CARD_MAX_CHARS, c["file"])
             for section in SECTIONS:
                 self.assertIn(section, text, c["file"])
-            # pair completeness: every выписка ships with its source chart
-            source = c["file"][: -len(cards.SUFFIX)] + SOURCE_SUFFIX
-            self.assertTrue((config.CARD_DIR / source).is_file(),
-                            f"{c['file']} has no sibling {source}")
-
-    def test_source_charts_are_not_attachable(self):
-        listed = {c["file"] for c in cards.list_cards(config.CARD_DIR)}
-        charts = list(config.CARD_DIR.glob(f"*{SOURCE_SUFFIX}"))
-        self.assertGreaterEqual(len(charts), 2)
-        for chart in charts:
-            self.assertNotIn(chart.name, listed)
-            with self.assertRaises(cards.CardError):
-                cards.load_card(chart.name)
 
 
 class TestCardBlock(unittest.TestCase):
@@ -132,11 +118,11 @@ class TestCardBlock(unittest.TestCase):
         from medassistant import prompts
         block = prompts.card_block("Иванов ИИ", "строка 1\nстрока 2")
         self.assertTrue(block.startswith(
-            "Выписка из амбулаторной карты пациента Иванов ИИ "
+            "Амбулаторная карта пациента Иванов ИИ "
             "(приложена врачом; учитывай её при ответе):"))
         self.assertIn("\n\nстрока 1\nстрока 2\n\n", block)
-        self.assertTrue(block.endswith("(конец выписки)"))
-        self.assertNotIn(".выписка.md", block, "filenames never reach the model")
+        self.assertTrue(block.endswith("(конец карты)"))
+        self.assertNotIn(".амбулаторная_карта.md", block, "filenames never reach the model")
 
 
 if __name__ == "__main__":

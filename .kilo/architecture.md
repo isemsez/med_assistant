@@ -346,22 +346,21 @@ hand from the same composer:
 ## 9. Patient card context (example-only)
 
 Demo feature (owner decision 2026-10-06): the physician can attach a
-pre-written patient-history summary («выписка из амбулаторной карты») so the
-answerer answers *this* question in the context of *this* patient.
+hand-made patient chart («амбулаторная карта») so the answerer answers
+*this* question in the context of *this* patient.
 
 1. **Cards are hand-made text files** in `data/patient_cards/`
-   (`CARD_DIR`), as two-file demo pairs per patient (owner decision
-   2026-10-09): the attachable card `{ФИО}.выписка.md` (Cyrillic OK;
-   display name = filename minus the `.выписка.md` suffix, underscores →
-   spaces) plus its source chart `{ФИО}.амбулаторная_карта.md` — the
-   "original" every extract fact must be derivable from, never attachable
-   on the 4B tier: the summary file IS the artifact (a textual extract is
-   the only "preencoding" a chat-completions decoder accepts; no vectors
-   involved; full-chart attachment is deferred to the 27B tier — see the
-   out-of-scope list). Five fake pairs ship (Волков_ДС, Иванова_МП,
-   Петрова_АС, Смирнова_ЕВ, Соколов_АВ); the generator prompt
-   `data/patient_cards/PROMPT_browser_agent_EMK.md` describes the pair
-   convention. `GET /api/cards` lists the extracts only (a missing dir
+   (`CARD_DIR`): the attachable chart `{ФИО}.амбулаторная_карта.md`
+   itself (Cyrillic OK; display name = filename minus the
+   `.амбулаторная_карта.md` suffix, underscores → spaces) — owner
+   decision 2026-10-14, superseding the 2026-10-09 two-file convention
+   (attachable `{ФИО}.выписка.md` extract + non-attachable source chart):
+   the `*.выписка.md` extracts are deleted, the full chart IS the card.
+   The shipped charts are 4.8–6.6k chars — inside `CARD_MAX_CHARS`, so no
+   summarization tier is needed on the 4B model (a textual extract is the
+   only "preencoding" a chat-completions decoder accepts; no vectors
+   involved). Five fake charts ship (Волков_ДС, Иванова_МП, Петрова_АС,
+   Смирнова_ЕВ, Соколов_АВ). `GET /api/cards` lists them (a missing dir
    lists nothing). There is still **no card-adding mechanism and no
    summarizer**.
 2. **Per-question opt-in, invisible session pin.** The composer has ONE
@@ -383,15 +382,16 @@ answerer answers *this* question in the context of *this* patient.
    question; labeler calls are unchanged).
 3. **Prompt injection is one place:** `Pipeline._messages` appends
    `prompts.card_block(ФИО, text)` to the user message — a header line
-   («Выписка из амбулаторной карты пациента {ФИО} (приложена врачом;
-   учитывай её при ответе):»), the file text verbatim, and a closing
-   separator. The model never sees the filename; `SYSTEM_ANSWERER` is
-   untouched — the answerer stays a plain medical model, the card is
+   («Амбулаторная карта пациента {ФИО} (приложена врачом; учитывай её при
+   ответе):»), the file text verbatim, and a closing separator
+   («конец карты»). The model never sees the filename; `SYSTEM_ANSWERER`
+   is untouched — the answerer stays a plain medical model, the card is
    user-supplied context.
 4. **Validation (shared by server and CLI in `cards.py`), fresh read every
    request:** the doctor may edit the file mid-session. `POST /api/chat`
    gains optional `card` (filename): traversal-safe name inside `CARD_DIR`
-   (`Path(...).name` + parent check), mandatory `.выписка.md` suffix,
+    (`Path(...).name` + parent check), mandatory `.амбулаторная_карта.md`
+     suffix,
     existence, size ≤ `CARD_MAX_CHARS` (default 8000 ≈ 2k tokens; the model
     context is 131k, runtime `num_ctx` is 12288 via the Modelfile — 3x the
     Ollama 4096 default, which silently truncated the prompt head (system
@@ -405,11 +405,9 @@ answerer answers *this* question in the context of *this* patient.
    `card_rejected` on validation failure — filename and length only, card
    content is never logged (physician data stays out of the audit trail).
 7. **CLI parity:** `python -m medassistant ask --question "…" --card
-   Иванова_МП.выписка.md` (a filename in CARD_DIR or a direct path); the
-   stored message (`--save`) is the plain question.
+    Иванова_МП.амбулаторная_карта.md` (a filename in CARD_DIR or a direct
+    path); the stored message (`--save`) is the plain question.
 
-Out of scope (future): attaching the full амбулаторная карта
-(`*.амбулаторная_карта.md` as the card — planned for the 27B tier, owner
-decision 2026-10-09); card upload/creation from the UI; original files
+Out of scope (future): card upload/creation from the UI; original files
 (pdf/doc/db) with automatic summary regeneration; per-message card markers
 in sessions.sqlite; RAG over the card; OCR.

@@ -34,11 +34,10 @@ caption row is merged away in the UI); stored with `messages.kind='pdf'`,
 which never enters the answerer history. Bare «pdf» without a disease is a 400.
 
 Patient card context (architecture.md §9, demo, owner decision 2026-10-06):
-hand-made two-file demo pairs in `data/patient_cards/` — the attachable
-`{ФИО}.выписка.md` extract plus its non-attachable source chart
-`{ФИО}.амбулаторная_карта.md` (5 fake patients ship; the generator prompt
-`data/patient_cards/PROMPT_browser_agent_EMK.md` describes the pair
-convention); `GET /api/cards` lists the extracts only. The composer's «Карта пациента» is one
+hand-made demo charts in `data/patient_cards/` — the attachable
+`{ФИО}.амбулаторная_карта.md` itself (owner decision 2026-10-14, superseding
+the 2026-10-09 extract+chart pairs; the `*.выписка.md` extracts are gone);
+5 fake patients ship; `GET /api/cards` lists the charts. The composer's «Карта пациента» is one
 toggle button (owner decision 2026-10-07): OFF — click opens the picker;
 ON — shows the patient name, click detaches it, and every non-pdf question
 carries the card while ON. The visible state is per chat session —
@@ -49,7 +48,7 @@ pick via `POST /api/sessions/{id}/card`, re-pinned on send; `GET
 highlighted at the bottom of the list (the menu opens upward). Message
 content never stores card text; audit logs filename+chars only.
 Validation (`cards.py`, shared with the CLI): traversal-safe filename,
-`.выписка.md` suffix, size ≤ `CARD_MAX_CHARS` (default 8000) → 400 before
+`.амбулаторная_карта.md` suffix, size ≤ `CARD_MAX_CHARS` (default 8000) → 400 before
 the question is sent; the file is re-read fresh on every request (the
 doctor may edit it mid-session). Pdf turns ignore the card entirely.
 
@@ -90,12 +89,10 @@ data/abbr2term.yaml      4,506 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
 data/index/              built embedding index (vectors.npy + meta.json with a
                          docs_meta freshness stamp)
-data/patient_cards/      hand-made demo patient pairs: attachable
-                         *.выписка.md + non-attachable source chart
-                         *.амбулаторная_карта.md (5 fake patients,
-                         generator prompt PROMPT_browser_agent_EMK.md) —
-                         per-question answerer context; nothing is stored
-                         (architecture.md §9)
+data/patient_cards/      hand-made demo patient charts: attachable
+                          *.амбулаторная_карта.md (5 fake patients) —
+                          per-question answerer context; nothing is stored
+                          (architecture.md §9)
 data/sessions.sqlite     persistent chat sessions
 data/backups/            startup backups of sessions.sqlite (newest 5 kept)
 logs/audit.jsonl         one record per pipeline stage per turn (size-rotated,
@@ -196,7 +193,7 @@ python -m medassistant ask --question "Какие критерии диагно�
 python -m medassistant ask --question "pdf ХСН"            # manual pdf query
                                                              # (no answerer call)
 python -m medassistant ask --question "Что с одышкой?" `
-    --card Иванова_МП.выписка.md                           # patient card context
+    --card Иванова_МП.амбулаторная_карта.md            # patient card context
                                                              # (filename or path)
 python -m medassistant ask --answer-file answers.jsonl # appendix machinery over
                                                       # pre-generated answers

@@ -56,7 +56,7 @@ def setUpModule():
     os.environ["DRUGS_DB"] = str(TMP / "no-drugs.sqlite")
     cards_dir = TMP / "cards"
     cards_dir.mkdir()
-    (cards_dir / "Тестов_ТТ.выписка.md").write_text(
+    (cards_dir / "Тестов_ТТ.амбулаторная_карта.md").write_text(
         "## Диагнозы\n- тест", encoding="utf-8")
     os.environ["CARD_DIR"] = str(cards_dir)
     import medassistant.config
@@ -371,7 +371,7 @@ class TestPdfTurn(Base):
         self.assertIsNone(msgs[1]["appendix"])
 
 
-CARD_FILE = "Тестов_ТТ.выписка.md"
+CARD_FILE = "Тестов_ТТ.амбулаторная_карта.md"
 CARD_TEXT = "## Диагнозы\n- тест"
 
 
@@ -411,8 +411,8 @@ class TestCards(Base):
         self.assertIsNone(second[3], "the next question carries no card")
 
     def test_invalid_card_400_question_not_sent(self):
-        for bad in ("Нет_такого.выписка.md", "..\\evil.выписка.md",
-                    "../evil.выписка.md", "Тестов_ТТ.md", ".."):
+        for bad in ("Нет_такого.амбулаторная_карта.md", "..\\evil.амбулаторная_карта.md",
+                    "../evil.амбулаторная_карта.md", "Тестов_ТТ.md", ".."):
             sid, r = self._post_card(bad)
             self.assertEqual(r.status_code, 400, bad)
             self.assertEqual(self.pipe.calls, [], bad)
@@ -424,13 +424,13 @@ class TestCards(Base):
 
     def test_pdf_turn_ignores_card_entirely(self):
         # an INVALID card must not even be validated on the pdf path
-        sid, r = self._post_card("ghost.выписка.md", question="pdf ХСН")
+        sid, r = self._post_card("ghost.амбулаторная_карта.md", question="pdf ХСН")
         self.assertEqual(r.status_code, 200)
         self.assertEqual([c[0] for c in self.pipe.calls], ["appendix"])
 
     def test_card_used_audit_no_content(self):
         sid, _ = self.chat(card=CARD_FILE)
-        sid, r = self._post_card("ghost.выписка.md", session_id=sid)
+        sid, r = self._post_card("ghost.амбулаторная_карта.md", session_id=sid)
         self.assertEqual(r.status_code, 400)
         recs = [json.loads(l) for l in (TMP / "audit.jsonl")
                 .read_text(encoding="utf-8").splitlines()]
@@ -439,7 +439,7 @@ class TestCards(Base):
         self.assertEqual(used[-1]["file"], CARD_FILE)
         self.assertGreater(used[-1]["chars"], 0)
         rejected = [r for r in recs if r["stage"] == "card_rejected"]
-        self.assertEqual(rejected[-1]["file"], "ghost.выписка.md")
+        self.assertEqual(rejected[-1]["file"], "ghost.амбулаторная_карта.md")
         # audit carries filename + char count only, never the card content
         self.assertNotIn(CARD_TEXT.splitlines()[-1],
                          json.dumps(recs, ensure_ascii=False))
@@ -476,7 +476,7 @@ class TestCards(Base):
     def test_pin_post_rejects_unknown_file(self):
         sid = self.client.post("/api/sessions", json={"title": ""}).json()["id"]
         r = self.client.post(f"/api/sessions/{sid}/card",
-                             json={"file": "ghost.выписка.md"})
+                             json={"file": "ghost.амбулаторная_карта.md"})
         self.assertEqual(r.status_code, 400)
         self.assertEqual(
             self.client.get(f"/api/sessions/{sid}/card").json(), {"file": None})
@@ -495,7 +495,7 @@ class TestCards(Base):
 
     def test_pin_with_missing_file_dropped(self):
         sid, _ = self.chat(card=CARD_FILE)
-        srv.app.state.store.set_session_card(sid, "ghost.выписка.md")
+        srv.app.state.store.set_session_card(sid, "ghost.амбулаторная_карта.md")
         self.assertEqual(self.client.get(f"/api/sessions/{sid}/card").json(),
                          {"file": None})
         self.assertIsNone(srv.app.state.store.get_session_card(sid))

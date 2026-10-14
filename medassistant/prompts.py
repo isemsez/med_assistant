@@ -27,9 +27,9 @@ def card_block(display_name, text):
     message (owner decision 2026-10-06, architecture.md §9). The header — not
     the filename — is the only ФИО signal the model sees; the text goes in
     verbatim, framed by the header and a closing separator."""
-    return (f"Выписка из амбулаторной карты пациента {display_name} "
+    return (f"Амбулаторная карта пациента {display_name} "
             "(приложена врачом; учитывай её при ответе):\n\n"
-            f"{text.strip()}\n\n(конец выписки)")
+            f"{text.strip()}\n\n(конец карты)")
 
 
 def drug_block(matches):

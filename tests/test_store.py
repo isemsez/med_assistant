@@ -67,13 +67,13 @@ class TestStore(unittest.TestCase):
         a = self.store.create_session()
         b = self.store.create_session()
         self.assertIsNone(self.store.get_session_card(a))
-        self.store.set_session_card(a, "Иванов_ИИ.выписка.md")
+        self.store.set_session_card(a, "Иванов_ИИ.амбулаторная_карта.md")
         self.assertEqual(self.store.get_session_card(a),
-                         "Иванов_ИИ.выписка.md")
+                         "Иванов_ИИ.амбулаторная_карта.md")
         self.assertIsNone(self.store.get_session_card(b), "pin is per session")
-        self.store.set_session_card(a, "Петрова_АП.выписка.md")
+        self.store.set_session_card(a, "Петрова_АП.амбулаторная_карта.md")
         self.assertEqual(self.store.get_session_card(a),
-                         "Петрова_АП.выписка.md")
+                         "Петрова_АП.амбулаторная_карта.md")
         self.store.set_session_card(a, None)
         self.assertIsNone(self.store.get_session_card(a))
         self.assertIsNone(self.store.get_session_card(999))
