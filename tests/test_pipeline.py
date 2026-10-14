@@ -440,7 +440,9 @@ class TestCardContext(unittest.TestCase):
 class TestDrugContext(unittest.TestCase):
     MATCHES = [{"trade": "Сорбифер Дурулес",
                 "inn": "железа сульфат + аскорбиновая кислота",
-                "token": "сорбифер"}]
+                "token": "сорбифер",
+                "en": "железа сульфат + аскорбиновая кислота"
+                      " (ascorbic acid)"}]
 
     def test_drug_ps_lands_between_question_and_card(self):
         pipe = make_pipe()
@@ -449,7 +451,7 @@ class TestDrugContext(unittest.TestCase):
         content = msgs[-1]["content"]
         ps = ("(справочно, из государственного реестра лекарственных средств:\n"
               "«сорбифер» — торговое наименование «Сорбифер Дурулес», МНН:"
-              " железа сульфат + аскорбиновая кислота)")
+              " железа сульфат + аскорбиновая кислота (ascorbic acid))")
         self.assertEqual(
             content,
             f"{Q}\n\n{ps}\n\nВыписка из амбулаторной карты пациента Иванов ИИ"
@@ -458,18 +460,16 @@ class TestDrugContext(unittest.TestCase):
 
     def test_drug_ps_one_line_per_match_and_alias_via(self):
         pipe = make_pipe()
-        matches = [{**self.MATCHES[0],
-                    "en": "ferrous sulfate + ascorbic acid"},
-                   {"trade": "Валерианы настойка",
-                    "inn": "валерианы лекарственной корневищ с корнями настойка",
-                    "via": "валерьянки"},
-                   {"trade": "Кагоцел", "inn": "меглюмина акридонацетат"}]
+        matches = self.MATCHES + [
+            {"trade": "Валерианы настойка",
+             "inn": "валерианы лекарственной корневищ с корнями настойка",
+             "via": "валерьянки"},
+            {"trade": "Кагоцел", "inn": "меглюмина акридонацетат"}]
         content = pipe._messages(Q, None, drug=matches)[-1]["content"]
         self.assertIn(
             "(справочно, из государственного реестра лекарственных средств:\n"
             "«сорбифер» — торговое наименование «Сорбифер Дурулес», МНН:"
-            " железа сульфат + аскорбиновая кислота"
-            " (ferrous sulfate + ascorbic acid);\n"
+            " железа сульфат + аскорбиновая кислота (ascorbic acid);\n"
             "«валерьянки» — разговорное название, «Валерианы настойка»"
             " — торговое наименование, МНН: валерианы лекарственной"
             " корневищ с корнями настойка;\n"

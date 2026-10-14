@@ -176,8 +176,9 @@ function renderAppendix(payload, anchor) {
 function renderDrugMap(matches, anchor) {
   const wrap = document.createElement("div");
   wrap.className = "sources drug";
+  // m.en is the rendered per-component МНН (russian + english parens)
   const items = (matches || []).map((m) =>
-    `<li>${esc(m.trade)} → ${esc(m.inn)}</li>`).join("");
+    `<li>${esc(m.trade)} → ${esc(m.en || m.inn)}</li>`).join("");
   wrap.innerHTML = `<ul>${items}</ul>`;
   insertAfter(wrap, anchor || null);
   return wrap;

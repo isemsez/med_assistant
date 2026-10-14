@@ -51,7 +51,11 @@ def drug_block(matches):
     for m in (matches or []):
         if not m.get("inn"):
             continue
-        inn = m["inn"] + (f" ({m['en']})" if m.get("en") else "")
+        # `en` is the rendered per-component МНН: «железа сульфат +
+        # аскорбиновая кислота (ascorbic acid)» — English in parentheses
+        # after each substance name it exists for (owner decision
+        # 2026-10-14)
+        inn = m["en"] if m.get("en") else m["inn"]
         if m.get("via"):
             lines.append(f"«{m['via']}» — разговорное название, "
                          f"«{m['trade']}» — торговое наименование, "

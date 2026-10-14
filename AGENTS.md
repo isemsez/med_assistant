@@ -67,25 +67,23 @@ models/                  Modelfiles (medgemma-cpu, medgemma-labeler, bge-cpu)
 data/docs_meta.json      register metadata, 757 guidelines (copied from gp-eval)
 data/drugs.sqlite        ГРЛС drugs register (built by scripts/grls_to_sqlite.py;
                          trade name → МНН grounding for the answerer, missing
-                         file = feature silently off)
+                         file = feature silently off; inn_en/inn_lat columns
+                         hold per-component English/Latin INNs written by
+                         scripts/inn_to_en.py — the runtime reads them, never
+                         a side file)
 data/drug_aliases.yaml   owner-curated colloquial aliases for the МНН lookup
                          (tier 3, fires only when the dict found nothing;
                          value = register trade name OR a direct МНН for
                          register holes — e.g. валерьянка, кагоцел; owner
                          truth, never auto-extended)
-data/inn_gloss.yaml      owner-curated English glosses for register МНН the
+data/inn_gloss.yaml      owner-curated English glosses for МНН components the
                          WHO list cannot convert (true holes: ментилизовалерат,
-                         салициловая/ацетилсалициловая кислота; owner truth,
-                         overrides the generated map)
+                         салициловая/ацетилсалициловая кислота; applied
+                         per component as fallback after the inn_en column)
 data/inn_list_en-lat.txt owner-prepared pairing "english<TAB>latin" of the
                          WHO recommended INN list (through list 95, FIMEA
-                         mirror) — the conversion source, not loaded at
-                         runtime
-data/inn_en.json         GENERATED ru-МНН → en-INN map (scripts/inn_to_en.py
-                         from inn_list_en-lat.txt × drugs.sqlite; exact-rule
-                         matches only — the distance-1 tier is never written).
-                         Rebuild after a WHO list refresh; the meta block
-                         records source sha1 and counts
+                         mirror) — the conversion source for
+                         scripts/inn_to_en.py, not loaded at runtime
 data/abbr2term.yaml      4,506 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
 data/index/              built embedding index (vectors.npy + meta.json with a

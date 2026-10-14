@@ -1,4 +1,4 @@
-"""Build data/inn_en.json: register МНН -> English INN (WHO list).
+"""Translate register МНН to English INNs and store them IN drugs.sqlite.
 
 Source of truth: data/inn_list_en-lat.txt — the owner-prepared pairing
 "english<TAB>latin" of the WHO recommended INN list (through list 95,
@@ -7,33 +7,36 @@ forms, so conversion is mechanical: transliterate back to Latin,
 canonicalize both sides (Russian drops h, writes кс/ц/и where Latin has
 x/c/y; salt and acid grammar forms differ), and match token sequences.
 
-Trust policy (owner decision 2026-10-14): only EXACT sequence matches
-(after canonicalization) enter the file — the distance-1 tier is
-reported but never written (a missing gloss costs nothing; a wrong gloss
-is the hallucination we are fighting). Composites («x + y») convert
-all-or-nothing. Entries from data/inn_gloss.yaml (true WHO holes like
-ментилизовалерат) override the generated map at load time.
+Output: columns `inn_en` / `inn_lat` in the drugs table (per row, same
+value for all rows sharing an МНН). Compound МНН («x + y») translate
+PER COMPONENT: each part is translated independently, parts that fail
+stay untranslated (empty slot in the composite), a row where nothing
+translated gets NULL — the runtime renderer puts the English in
+parentheses after each substance name it has one for.
 
-Rebuild after dropping in a refreshed WHO list:
-    python scripts/inn_to_en.py            # writes data/inn_en.json
-    python scripts/inn_to_en.py --report   # stats + fuzzy-tier preview
+Trust policy (owner decision 2026-10-14): only EXACT rule matches are
+written; the distance-1 tier is reported (--report) but never applied
+(a missing gloss costs nothing; a wrong gloss is the hallucination we
+are fighting). True WHO holes (ментилизовалерат, железа сульфат) belong
+to the curated data/inn_gloss.yaml, applied per component at runtime.
+
+    python scripts/inn_to_en.py             # alter + update drugs.sqlite
+    python scripts/inn_to_en.py --report    # stats only, no writes
 """
 
 import argparse
 import hashlib
-import json
 import re
 import sqlite3
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from medassistant import config  # noqa: E402
 from medassistant.drugmap import PLACEHOLDER_INNS, clean_inn  # noqa: E402
 
-RULES_VERSION = "1"
+RULES_VERSION = "2"
 
 TRANS = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
@@ -53,9 +56,6 @@ SALT = {
     "hydrochloridum": "hcl", "hydrochlorid": "hcl", "гидрохлорид": "hcl",
     "acidum": "acid", "acid": "acid", "кислота": "acid", "кислоты": "acid",
 }
-
-ACID_WORDS = {"acid"}
-ACID_ADJ_TRANSFORM = ("ovaia", "ic"), ("evaia", "ic")
 
 
 def parse_pairs(text):
@@ -90,11 +90,6 @@ def _canon(joined):
     return re.sub(r"[^a-z0-9]", "", s)
 
 
-def canon_lat(name):
-    toks = [SALT.get(t, _strip_latin_endings(t)) for t in _tokens(name)]
-    return _canon("".join(toks))
-
-
 def canon_ru(name):
     toks = []
     for t in _tokens(name):
@@ -126,33 +121,32 @@ def canon_ru_variants(name):
 
 
 class InnConverter:
-    """WHO paired list -> RU МНН to EN INN converter (exact tier)."""
+    """WHO paired list -> (en, latin) for RU МНН components (exact tier)."""
 
     def __init__(self, pairs):
         self.pairs = pairs
-        # canonical token sequence -> {en}
-        self.index = defaultdict(set)
+        # canonical token sequence -> {en: latin}
+        self.index = defaultdict(dict)
         # acids: adjective stem candidates for the RU «<adj> кислота» form
-        self.acids = []  # (latin_adj_canon, en)
+        self.acids = []  # (latin_adj_canon, en, latin)
         for en, latin in pairs:
-            la, en_toks = _tokens(latin), _tokens(en)
-            self.index[canon_lat(latin)].add(en)
+            la_toks, en_toks = _tokens(latin), _tokens(en)
+            self.index[canon_lat(latin)][en] = latin
             self.index[_canon("".join(
-                SALT.get(t, t) for t in en_toks))].add(en)
-            if "acidum" in la or "acid" in en_toks:
-                adj = [t for t in la if t not in ("acidum",)]
-                if len(la) == 2 and len(adj) == 1:
+                SALT.get(t, t) for t in en_toks))][en] = latin
+            if "acidum" in la_toks or "acid" in en_toks:
+                adj = [t for t in la_toks if t != "acidum"]
+                if len(la_toks) == 2 and len(adj) == 1:
                     stem = canon_lat(adj[0])
                     if len(stem) >= 4:
-                        self.acids.append((stem, en))
+                        self.acids.append((stem, en, latin))
         self.acid_stems = sorted(self.acids, key=lambda x: -len(x[0]))
-
-    # -- one RU component (no «+»), returns en or None -------------------
 
     def _exact(self, canon_seq):
         hit = self.index.get(canon_seq)
         if hit and len(hit) == 1:
-            return next(iter(hit))
+            en, latin = next(iter(hit.items()))
+            return en, latin
         return None
 
     def _match_acid(self, ru):
@@ -169,8 +163,8 @@ class InnConverter:
                 stem = stem[: -len(suf)]
                 break
         c = canon_ru(stem)
-        best = (0, [])  # (lcp, [en])
-        for cand, en in self.acid_stems:
+        best = (0, [])  # (lcp, [(en, latin)])
+        for cand, en, latin in self.acid_stems:
             lcp = 0
             for a, b in zip(c, cand):
                 if a != b:
@@ -178,15 +172,15 @@ class InnConverter:
                 lcp += 1
             if lcp >= 5 and lcp >= 0.7 * min(len(c), len(cand)):
                 if lcp > best[0]:
-                    best = (lcp, [en])
-                elif lcp == best[0] and en not in best[1]:
-                    best[1].append(en)
+                    best = (lcp, [(en, latin)])
+                elif lcp == best[0] and (en, latin) not in best[1]:
+                    best[1].append((en, latin))
         if best[0] and len(best[1]) == 1:
             return best[1][0]
         return None
 
     def convert_component(self, ru):
-        """One «+»-free МНН component -> English INN or None. Full-name
+        """One «+»-free МНН component -> (en, latin) or None. Full-name
         match only — no partial-word fallback (a partial gloss of a
         descriptive phrase is a wrong gloss)."""
         ru = ru.strip()
@@ -199,46 +193,23 @@ class InnConverter:
         return self._match_acid(ru)
 
     def convert(self, ru_inn):
-        """Full register МНН (may be «x + y») -> English or None
-        (all-or-nothing: no half-glossed composites)."""
+        """Full register МНН (may be «x + y») -> (en_composite,
+        lat_composite) or (None, None). Per component; untranslated parts
+        leave an empty slot; NULL when nothing translated."""
         parts = [p.strip() for p in ru_inn.split("+") if p.strip()]
         if not parts:
-            return None
-        ens = [self.convert_component(p) for p in parts]
-        return " + ".join(ens) if all(ens) else None
-
-    # -- diagnostics ------------------------------------------------------
-
-    def near_misses(self, ru_inn):
-        """Distance-1 candidates for the report (never written to the
-        product file)."""
-        parts = [p.strip() for p in ru_inn.split("+") if p.strip()]
-        out = []
-        for p in parts:
-            c = canon_ru(p)
-            for k in self.index:
-                if abs(len(k) - len(c)) == 1 and _lev1(c, k):
-                    out.append((p, sorted(self.index[k])))
-        return out
+            return None, None
+        hits = [self.convert_component(p) for p in parts]
+        ens = [h[0] if h else "" for h in hits]
+        lats = [h[1] if h else "" for h in hits]
+        en = " + ".join(ens) if any(ens) else None
+        lat = " + ".join(lats) if any(lats) else None
+        return en, lat
 
 
-def _lev1(a, b):
-    if abs(len(a) - len(b)) != 1:
-        return False
-    if len(a) > len(b):
-        a, b = b, a
-    i = j = 0
-    skipped = False
-    while i < len(a) and j < len(b):
-        if a[i] == b[j]:
-            i += 1
-            j += 1
-        elif skipped:
-            return False
-        else:
-            skipped = True
-            j += 1
-    return True
+def canon_lat(name):
+    toks = [SALT.get(t, _strip_latin_endings(t)) for t in _tokens(name)]
+    return _canon("".join(toks))
 
 
 def register_inns(db_path):
@@ -252,25 +223,64 @@ def register_inns(db_path):
 
 
 def build(pairs, inns):
-    """(pairs, register МНН list) -> (entries, stats)."""
+    """(pairs, register МНН list) -> {inn: (en, lat)}, stats."""
     conv = InnConverter(pairs)
-    entries, fuzzy = {}, {}
+    out = {}
+    partial = full = 0
     for inn in inns:
-        en = conv.convert(inn)
+        en, lat = conv.convert(inn)
         if en:
-            entries[inn] = en
-        else:
-            near = conv.near_misses(inn)
-            if near:
-                fuzzy[inn] = near
+            out[inn] = (en, lat)
+            if "" in en.split(" + "):
+                partial += 1
+            else:
+                full += 1
     stats = {
         "register_inns": len(inns),
-        "converted": len(entries),
-        "fuzzy_only": len(fuzzy),
-        "unmatched": len(inns) - len(entries) - len(fuzzy),
+        "fully_translated": full,
+        "partially_translated": partial,
+        "untranslated": len(inns) - full - partial,
         "rules_version": RULES_VERSION,
     }
-    return entries, stats, fuzzy
+    return out, stats
+
+
+def apply_db(pairs, db_path):
+    """Add inn_en/inn_lat to the drugs table (idempotent) and fill them
+    per register МНН. Returns (mapping keyed by cleaned МНН, stats)."""
+    conv = InnConverter(pairs)
+    con = sqlite3.connect(str(db_path))
+    updates = []
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(drugs)")}
+        for col in ("inn_en", "inn_lat"):
+            if col not in cols:
+                con.execute(f"ALTER TABLE drugs ADD COLUMN {col} TEXT")
+        # UPDATE matches the RAW register inn; conversion uses cleaned
+        for (raw,) in con.execute("select distinct inn from drugs"):
+            inn = clean_inn(raw)
+            if not inn or inn in PLACEHOLDER_INNS:
+                continue
+            en, lat = conv.convert(inn)
+            if en:
+                updates.append((en, lat, raw))
+        con.executemany(
+            "UPDATE drugs SET inn_en=?, inn_lat=? WHERE inn=?", updates)
+        con.commit()
+    finally:
+        con.close()
+    mapping = {clean_inn(raw): (en, lat) for en, lat, raw in updates}
+    full = sum(1 for en, _ in mapping.values()
+               if "" not in en.split(" + "))
+    partial = len(mapping) - full
+    stats = {
+        "register_inns": len(register_inns(db_path)),
+        "fully_translated": full,
+        "partially_translated": partial,
+        "untranslated": len(register_inns(db_path)) - len(mapping),
+        "rules_version": RULES_VERSION,
+    }
+    return mapping, stats
 
 
 def main(argv=None):
@@ -278,40 +288,30 @@ def main(argv=None):
     ap.add_argument("--pairs", default=str(config.PROJECT_ROOT
                                            / "data" / "inn_list_en-lat.txt"))
     ap.add_argument("--drugs", default=str(config.DRUGS_DB))
-    ap.add_argument("--out", default=str(config.PROJECT_ROOT
-                                         / "data" / "inn_en.json"))
     ap.add_argument("--report", action="store_true",
-                    help="print stats and fuzzy-tier preview, write nothing")
+                    help="print stats only, write nothing")
     args = ap.parse_args(argv)
 
     pairs = parse_pairs(Path(args.pairs).read_text(encoding="utf-8"))
-    inns = register_inns(args.drugs)
-    entries, stats, fuzzy = build(pairs, inns)
-
     src = Path(args.pairs)
-    meta = {
-        "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "source": src.name,
-        "source_sha1": hashlib.sha1(src.read_bytes()).hexdigest(),
-        "pairs": len(pairs),
-        **stats,
-    }
+    digest = hashlib.sha1(src.read_bytes()).hexdigest()[:12]
+    print(f"source: {src.name} sha1={digest} pairs={len(pairs)}")
+
+    if args.report:
+        mapping, stats = build(pairs, register_inns(args.drugs))
+    else:
+        mapping, stats = apply_db(pairs, args.drugs)
     for k, v in stats.items():
         print(f"  {k}: {v}")
-    if args.report:
-        print("fuzzy-tier preview (NOT written):")
-        for inn, near in list(fuzzy.items())[:15]:
-            print(f"  {inn!r} ~ {near[:2]}")
-        return
 
-    Path(args.out).write_text(
-        json.dumps({"meta": meta, "entries": entries}, ensure_ascii=False,
-                   indent=1, sort_keys=True), encoding="utf-8")
-    print(f"-> {args.out} ({len(entries)} entries)")
     spot = ["ибупрофен", "дексаметазон", "левотироксин натрия",
-            "аскорбиновая кислота"]
+            "аскорбиновая кислота",
+            "железа сульфат + аскорбиновая кислота"]
     for s in spot:
-        print(f"  spot {s!r}: {entries.get(s)}")
+        en, lat = mapping.get(s, (None, None))
+        print(f"  spot {s!r}: en={en!r} lat={lat!r}")
+    if not args.report:
+        print(f"-> updated {args.drugs} (columns inn_en, inn_lat)")
 
 
 if __name__ == "__main__":

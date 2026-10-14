@@ -125,18 +125,21 @@ final answer = raw answer + appendix block (local PDF links only)
   deduped and capped (`DRUG_PS_MAX`). Every P.S. line anchors the
   doctor's own word to the register row (`token`/`via`) — without the
   anchor the 4B re-identifies the drug from its own prior (валидол →
-  "Valium" → диазепам, A/B-verified 2026-10-13); МНН lines carry an
-  English gloss when available — the model reasons in English and
+  "Valium" → диазепам, A/B-verified 2026-10-13); МНН lines carry
+  per-component English glosses in parentheses after each substance name
+  when one exists («железа сульфат + аскорбиновая кислота (ascorbic
+  acid)», owner decision 2026-10-14) — the model reasons in English and
   substitutes a plausible compound when it cannot parse a rare token
-  (ментилизовалерат → "menthylsalicylate", 2026-10-13). Glosses come from
-  a generated map (`data/inn_en.json`, built by `scripts/inn_to_en.py`
-  from the WHO recommended INN list paired en↔latin
-  `data/inn_list_en-lat.txt`; RU МНН are Cyrillic renderings of the Latin
-  forms, converted mechanically — exact-rule matches only, the
-  distance-1 tier is never written: a missing gloss costs nothing, a
-  wrong gloss is the hallucination itself) with the curated
-  `data/inn_gloss.yaml` (owner truth) covering true WHO holes and
-  overriding the map.
+  (ментилизовалерат → "menthylsalicylate", 2026-10-13). Glosses live in
+  the register itself: `scripts/inn_to_en.py` converts RU МНН from the
+  WHO recommended INN list (`data/inn_list_en-lat.txt`, paired en↔latin)
+  and writes `inn_en`/`inn_lat` columns into `data/drugs.sqlite`
+  (exact-rule matches only, per component with empty slots for
+  untranslated parts — the distance-1 tier is never written: a missing
+  gloss costs nothing, a wrong gloss is the hallucination itself; run it
+  again after a WHO list refresh). The curated `data/inn_gloss.yaml`
+  (owner truth) answers per component for true WHO holes
+  (ментилизовалерат) after the column.
 - No footnote rule, no self-labelling, no few-shot examples that could leak.
   The prompt stays **silent** about footnotes — no negative instruction
   either: the model has no such instinct to suppress, and naming the behavior
