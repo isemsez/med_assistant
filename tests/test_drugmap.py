@@ -25,6 +25,7 @@ ROWS = [
     ("Валерианы экстракт", "Валерианы лекарственной корневищ с корнями экстракт"),
     ("Железо Комплекс", "Железа фумарат"),
     ("Кагоцел®", "~"),                              # placeholder МНН: not keyed
+    ("Истуриса®", "Осилодростат"),  # key «истурис»: Levenshtein-2 of «историю»
 ]
 
 ALIASES = {"валерьянка": "Валерианы настойка",  # value = register trade name
@@ -174,6 +175,20 @@ class TestFuzzy(unittest.TestCase):
         # «нурофкн» is within Levenshtein 2 of the ambiguous key «нурофе» —
         # the typo tier only accepts unambiguous keys, so nothing matches
         self.assertEqual(dmap().lookup("нурофкн дозировка"), [])
+
+    def test_common_word_history_not_fuzzy(self):
+        # «историю» is Levenshtein-2 of the unambiguous key «истурис»
+        # (Истуриса — осилодростат): the stoplist must suppress it in every
+        # inflected 7-char form; 8+ char forms are already distance ≥3
+        self.assertEqual(
+            dmap().lookup("в кратце перескажи его историю"), [])
+        for form in ("история", "истории", "историй"):
+            self.assertEqual(dmap().lookup(f"перескажи {form} болезни"), [])
+
+    def test_real_drug_still_matches_despite_history_stopword(self):
+        m = dmap().lookup("дозировка истурисы")
+        self.assertEqual(m, [{"trade": "Истуриса", "inn": "осилодростат",
+                              "token": "истурисы"}])
 
 
 class TestPairColumn(unittest.TestCase):

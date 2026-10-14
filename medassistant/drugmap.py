@@ -48,8 +48,11 @@ TRADE_MARKS = "®™"              # stripped from display names
 DEFAULT_CAP = 5
 
 # Common question words that must never match a key (empirical; extend per
-# validation — a false positive costs only a справочно line).
-STOP_WORDS = {"таблетки", "таблеток", "препарата", "препараты", "железо"}
+# validation — a false positive costs only a справочно line). «истори*» forms
+# sit within Levenshtein-2 of the key «истурис» (Истуриса — осилодростат) and
+# fired the typo tier on «перескажи его историю».
+STOP_WORDS = {"таблетки", "таблеток", "препарата", "препараты", "железо",
+              "история", "истории", "историю", "историй"}
 
 
 def _norm(text):
