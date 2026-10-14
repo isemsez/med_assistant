@@ -287,9 +287,12 @@ def chat(req: ChatRequest):
                     yield _sse("reasoning", {"t": t})
                 elif event["type"] == "reasoning_reset":
                     # a degenerate thinking loop was aborted upstream; the
-                    # retry restarts reasoning from scratch (2026-10-06)
+                    # retry restarts reasoning from scratch (2026-10-06).
+                    # The note replaces the old silent wipe so the restart
+                    # is visible (owner report 2026-10-14)
                     reasoning_parts, drop = [], len("thought\n")
-                    yield _sse("reasoning_reset", {})
+                    yield _sse("reasoning_reset", {
+                        "note": "Зацикливание размышлений — перезапускаю."})
                 else:
                     parts.append(event["text"])
                     yield _sse("token", {"t": event["text"]})
@@ -297,6 +300,11 @@ def chat(req: ChatRequest):
             failed = True
             aud.log("stage_stop", stop_stage="answerer", session_id=sid,
                     error=str(e))
+            if isinstance(e, llm.LLMLoopError):
+                # the retry looped again — drop the looped garbage and say
+                # why the thinking block is empty before the honest failure
+                yield _sse("reasoning_reset", {
+                    "note": "Зацикливание размышлений — генерация прервана."})
             yield _sse("error", {"text": "Сбой генерации ответа."})
 
         raw_answer = "".join(parts)

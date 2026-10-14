@@ -512,8 +512,10 @@ async function send(question) {
           autoScroll();
         } else if (ev.event === "reasoning_reset") {
           // degenerate thinking loop aborted upstream; the retry restarts
-          // the reasoning from scratch — drop the looped garbage
-          if (thinking) thinking.body.textContent = "";
+          // the reasoning from scratch (or the turn died on a second loop) —
+          // drop the looped garbage, leave a one-line trace of the restart
+          if (!thinking) thinking = makeThinkingBlock(asst);
+          thinking.body.textContent = data.note ? data.note + "\n\n" : "";
         } else if (ev.event === "drug_map") {
           // register-grounded МНН block under the question bubble; the
           // same renderer restores it from m.drug_map after a reload

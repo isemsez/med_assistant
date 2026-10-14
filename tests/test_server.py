@@ -207,7 +207,8 @@ class TestChat(Base):
     def test_reasoning_reset_clears_thinking(self):
         # watchdog aborted a looped stream upstream; the retry restarts
         # reasoning (stray "thought\n" prefix dropped again) and only the
-        # fresh reasoning is streamed and stored (owner decision 2026-10-06)
+        # fresh reasoning is streamed and stored (owner decision 2026-10-06;
+        # the reset carries a visible note since 2026-10-14)
         self.pipe.answer_events = [
             {"type": "reasoning", "text": "loop"},
             {"type": "reasoning_reset"},
@@ -215,7 +216,9 @@ class TestChat(Base):
             {"type": "content", "text": "Ответ."},
         ]
         sid, events = self.chat()
-        self.assertIn(("reasoning_reset", {}), events)
+        self.assertIn(("reasoning_reset",
+                       {"note": "Зацикливание размышлений — перезапускаю."}),
+                      events)
         reasoning = "".join(d["t"] for e, d in events if e == "reasoning")
         self.assertEqual(reasoning, "заново")
         msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
@@ -223,9 +226,18 @@ class TestChat(Base):
 
     def test_double_loop_fails_honestly(self):
         self.pipe.answer_events = llm.LLMLoopError(
-            "degenerate reasoning loop: tail x3")
+            "degenerate reasoning loop: unit x3")
         sid, events = self.chat()
         names = [e for e, _ in events]
+        # the fatal loop's garbage is dropped with its own note before the
+        # honest failure (owner report 2026-10-14)
+        self.assertIn(("reasoning_reset",
+                       {"note": "Зацикливание размышлений — генерация "
+                                "прервана."}), events)
+        self.assertLess(events.index(("reasoning_reset",
+                                      {"note": "Зацикливание размышлений — "
+                                               "генерация прервана."})),
+                        names.index("error"))
         self.assertIn("error", names)
         done = dict(events)["done"]
         self.assertIsNone(done["message_id"])

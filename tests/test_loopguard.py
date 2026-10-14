@@ -3,8 +3,19 @@ import unittest
 from medassistant import config
 from medassistant.loopguard import LoopGuard
 
-# the observed medgemma failure (2026-10-06): verbatim phrase cycling
+# the observed medgemma failure (2026-10-06): verbatim phrase cycling,
+# the same unit emitted back-to-back until the budget dies
 LOOP_PHRASE = "негиперпигментационные, негиперкератотические, "
+
+# the observed false abort (2026-10-14): DIFFERENT questions sharing one
+# long answer suffix from the card's example section — recurring but
+# never consecutive, so the old anywhere-in-window detector killed a
+# healthy stream
+SHARED_SUFFIX = ('м и изосорбида мононитрат 20 мг 2 раза в сутки."'
+                 "\n*   **Doctor:**")
+SCATTERED = "".join(
+    f"Вопрос {i}: лизиноприл 10 мг утро{SHARED_SUFFIX} гипертензия {i}? "
+    for i in range(8))
 
 # flowing, non-repetitive medical reasoning
 FLOWING = "".join(
@@ -14,9 +25,9 @@ FLOWING = "".join(
 
 class TestLoopGuard(unittest.TestCase):
     def setUp(self):
-        self.guard = LoopGuard(tail_chars=64, repeats=3, window_chars=4096)
+        self.guard = LoopGuard(min_unit=8, repeats=3, window_chars=4096)
 
-    def test_fires_on_verbatim_loop(self):
+    def test_fires_on_consecutive_run(self):
         self.assertIsNone(self.guard.feed("Разбираю заболевание. "))
         reason = None
         for _ in range(10):
@@ -24,19 +35,35 @@ class TestLoopGuard(unittest.TestCase):
             if reason:
                 break
         self.assertIsNotNone(reason)
-        self.assertIn("tail x", reason)
+        self.assertIn("unit x", reason)
+
+    def test_fires_on_short_unit_run(self):
+        reason = self.guard.feed("пациента беспокоит " * 4)
+        self.assertIsNotNone(reason)
+
+    def test_silent_on_scattered_repeats(self):
+        # regression (2026-10-14): shared suffixes across distinct items
+        # must NOT trip — only back-to-back repetition is a loop
+        self.assertIsNone(self.guard.feed(SCATTERED))
 
     def test_silent_on_flowing_text(self):
         self.assertIsNone(self.guard.feed(FLOWING))
 
-    def test_silent_below_tail_chars(self):
+    def test_silent_below_min_unit(self):
+        # a run of a unit shorter than min_unit is not trip-worthy
         self.assertIsNone(self.guard.feed("короткая мысль"))
+        self.assertIsNone(self.guard.feed("аб " * 6))
+
+    def test_two_consecutive_copies_do_not_trip(self):
+        # restating a sentence once verbatim is not a loop (repeats=3)
+        sentence = "назначено: аторвастатин 40 мг вечером."
+        self.assertIsNone(self.guard.feed(f"{sentence} {sentence} "))
 
     def test_empty_feed_is_noop(self):
         self.assertIsNone(self.guard.feed(""))
 
     def test_window_trim_still_fires(self):
-        guard = LoopGuard(tail_chars=64, repeats=3, window_chars=200)
+        guard = LoopGuard(min_unit=8, repeats=3, window_chars=200)
         self.assertIsNone(guard.feed(FLOWING))  # trims old text on the way
         reason = None
         for _ in range(10):
@@ -53,7 +80,7 @@ class TestLoopGuard(unittest.TestCase):
 class TestConfigDefaults(unittest.TestCase):
     def test_defaults(self):
         self.assertTrue(config.LOOP_GUARD)
-        self.assertEqual(config.LOOP_TAIL_CHARS, 64)
+        self.assertEqual(config.LOOP_MIN_UNIT, 8)
         self.assertEqual(config.LOOP_REPEATS, 3)
         self.assertEqual(config.LOOP_WINDOW_CHARS, 4096)
         self.assertEqual(config.LOOP_RETRIES, 1)

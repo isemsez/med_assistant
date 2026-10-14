@@ -89,7 +89,7 @@ LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "128
 # degenerate pre-content reasoning loop, retry once with an
 # anti-repetition nudge. LOOP_GUARD=0 disables the watchdog.
 LOOP_GUARD = os.environ.get("LOOP_GUARD", "1") not in {"0", "false", "no"}
-LOOP_TAIL_CHARS = int(os.environ.get("LOOP_TAIL_CHARS", "64"))
+LOOP_MIN_UNIT = int(os.environ.get("LOOP_MIN_UNIT", "8"))
 LOOP_REPEATS = int(os.environ.get("LOOP_REPEATS", "3"))
 LOOP_WINDOW_CHARS = int(os.environ.get("LOOP_WINDOW_CHARS", "4096"))
 LOOP_RETRIES = int(os.environ.get("LOOP_RETRIES", "1"))

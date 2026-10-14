@@ -93,10 +93,10 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
     error surfaces as LLMError (a partial answer cannot be replayed).
 
     While no content token has arrived, a LoopGuard watches the reasoning
-    stream; a verbatim repetition loop aborts the request with
-    LLMLoopError (retrying mid-content would duplicate streamed text —
-    only the reasoning phase is guarded). `freq_penalty` adds an
-    anti-repetition nudge for the retry attempt (answerer only).
+    stream; the same unit repeated back-to-back (consecutive run) aborts
+    the request with LLMLoopError (retrying mid-content would duplicate
+    streamed text — only the reasoning phase is guarded). `freq_penalty`
+    adds an anti-repetition nudge for the retry attempt (answerer only).
     """
     kw = {"messages": messages, "temperature": temperature,
           "max_tokens": max_tokens, "stream": True}
@@ -105,7 +105,7 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
     if freq_penalty is not None:  # retry nudge overrides extra_body
         payload["frequency_penalty"] = freq_penalty
     body = json.dumps(payload, ensure_ascii=False)
-    guard = LoopGuard(tail_chars=config.LOOP_TAIL_CHARS,
+    guard = LoopGuard(min_unit=config.LOOP_MIN_UNIT,
                       repeats=config.LOOP_REPEATS,
                       window_chars=config.LOOP_WINDOW_CHARS) \
         if config.LOOP_GUARD else None

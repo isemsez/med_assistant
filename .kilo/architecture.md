@@ -146,18 +146,26 @@ final answer = raw answer + appendix block (local PDF links only)
   either: the model has no such instinct to suppress, and naming the behavior
   in a negation would only plant it.
 - Today: main Ollama instance, CPU, thinking on, 2048-token budget.
-- **Thinking-loop watchdog** (owner decision 2026-10-06): the reasoning
-  stream occasionally collapses into a verbatim repetition loop that burns
-  the whole budget (minutes of CPU, blocked composer, empty turn). While
-  no answer token has arrived yet, `llm.chat_stream` feeds every reasoning
-  delta into a `LoopGuard`; when the last `LOOP_TAIL_CHARS` chars repeat
-  `LOOP_REPEATS` times inside a `LOOP_WINDOW_CHARS` rolling buffer, the
-  request is aborted (`LLMLoopError` raised out of the stream context —
+- **Thinking-loop watchdog** (owner decision 2026-10-06; detector
+  redefined 2026-10-14): the reasoning stream occasionally collapses
+  into a tail-spin — the same unit repeated back-to-back — that burns
+  the whole budget (minutes of CPU, blocked composer, empty turn).
+  While no answer token has arrived yet, `llm.chat_stream` feeds every
+  reasoning delta into a `LoopGuard`; when the rolling
+  `LOOP_WINDOW_CHARS` buffer *ends* with a unit of ≥ `LOOP_MIN_UNIT`
+  chars repeated `LOOP_REPEATS` times **consecutively**, the request
+  is aborted (`LLMLoopError` raised out of the stream context —
   closing the connection cancels Ollama generation and frees the CPU).
-  The pipeline then retries once with an anti-repetition nudge
-  (`LOOP_RETRY_FREQ_PENALTY`), emitting `reasoning_reset` so the UI drops
-  the looped garbage; a second loop or an empty retry fails with the
-  honest «Сбой генерации ответа» note. Not a semantic retry: the prompt
+  Scattered recurring phrases never trip: the first detector counted
+  occurrences of the tail anywhere in the window and aborted a healthy
+  stream that was merely enumerating the card's example answers
+  (different questions sharing one long suffix — owner report
+  2026-10-14). The pipeline then retries once with an anti-repetition
+  nudge (`LOOP_RETRY_FREQ_PENALTY`), emitting `reasoning_reset` so the
+  UI drops the looped garbage and shows a visible
+  «Зацикливание размышлений — …» note; a second loop or an empty retry
+  fails with the honest «Сбой генерации ответа» note (its looped
+  garbage is dropped with a note too). Not a semantic retry: the prompt
   and content are untouched, only the sampler is nudged on a turn that
   was already lost. Loops after the first answer token are not guarded
   (aborting there would duplicate streamed text); `num_predict` bounds
