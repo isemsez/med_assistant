@@ -13,7 +13,10 @@ body { font: 15px/1.55 "Segoe UI", system-ui, sans-serif; color: var(--ink); bac
 .sidebar-head .logo { font-weight: 600; font-size: 16px; }
 #new-session { width: 100%; }
 #sessions { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-.session { padding: 8px 10px; padding-right: 28px; border-radius: 8px; cursor: pointer;
+/* flex-shrink: 0 — a column flex item with overflow: hidden gets an
+   automatic min-height of 0, so cards were compressed vertically as the
+   window shortened instead of the list scrolling (fixed height, scroll) */
+.session { flex-shrink: 0; padding: 8px 10px; padding-right: 28px; border-radius: 8px; cursor: pointer;
   font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; position: relative; }
 .session:hover { background: #eef2f6; }
