@@ -15,6 +15,7 @@ DEFAULTS = {
     "DRUGS_DB": "data/drugs.sqlite",
     "DRUG_ALIASES": "data/drug_aliases.yaml",
     "INN_GLOSS": "data/inn_gloss.yaml",
+    "INN_EN": "data/inn_en.json",
 }
 
 
@@ -49,6 +50,7 @@ CARD_DIR = _path("CARD_DIR")
 DRUGS_DB = _path("DRUGS_DB")
 DRUG_ALIASES_PATH = _path("DRUG_ALIASES")
 INN_GLOSS_PATH = _path("INN_GLOSS")
+INN_EN_PATH = _path("INN_EN")
 
 HISTORY_WINDOW = int(os.environ.get("HISTORY_WINDOW", "6"))
 DISEASE_CAP = int(os.environ.get("DISEASE_CAP", "3"))

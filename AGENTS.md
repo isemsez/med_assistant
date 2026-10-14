@@ -73,11 +73,19 @@ data/drug_aliases.yaml   owner-curated colloquial aliases for the МНН lookup
                          value = register trade name OR a direct МНН for
                          register holes — e.g. валерьянка, кагоцел; owner
                          truth, never auto-extended)
-data/inn_gloss.yaml      owner-curated English glosses for composite/obscure
-                         register МНН (data/inn_gloss.yaml is appended to the
-                         P.S. — the model reasons in English and confabulates
-                         compounds it cannot parse; owner truth, extended
-                         only on observed confabulations)
+data/inn_gloss.yaml      owner-curated English glosses for register МНН the
+                         WHO list cannot convert (true holes: ментилизовалерат,
+                         салициловая/ацетилсалициловая кислота; owner truth,
+                         overrides the generated map)
+data/inn_list_en-lat.txt owner-prepared pairing "english<TAB>latin" of the
+                         WHO recommended INN list (through list 95, FIMEA
+                         mirror) — the conversion source, not loaded at
+                         runtime
+data/inn_en.json         GENERATED ru-МНН → en-INN map (scripts/inn_to_en.py
+                         from inn_list_en-lat.txt × drugs.sqlite; exact-rule
+                         matches only — the distance-1 tier is never written).
+                         Rebuild after a WHO list refresh; the meta block
+                         records source sha1 and counts
 data/abbr2term.yaml      4,506 RU medical abbreviations (RuCCoD; NO LICENSE —
                          internal use only, do not redistribute)
 data/index/              built embedding index (vectors.npy + meta.json with a

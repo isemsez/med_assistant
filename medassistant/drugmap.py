@@ -28,6 +28,7 @@ file is owner-curated truth, never auto-extended), then a tight typo tier
 unambiguous). Results are deduped and capped.
 """
 
+import json
 import re
 import sqlite3
 from collections import Counter
@@ -323,14 +324,33 @@ def _load_flat(path):
     return out
 
 
-def load(path=None, aliases_path=None, gloss_path=None):
-    """drugs.sqlite (+ curated alias/gloss files) -> DrugMap; None when
-    the DB is missing (feature silently off)."""
-    if path is None or aliases_path is None or gloss_path is None:
+def _load_inn_en(path):
+    """Generated RU МНН -> EN INN map (built by scripts/inn_to_en.py from
+    the WHO paired list; exact matches only). Missing/broken file = {}."""
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entries = data.get("entries")
+        if not isinstance(entries, dict):
+            return {}
+        return {str(k): str(v) for k, v in entries.items() if v}
+    except (ValueError, OSError):
+        return {}
+
+
+def load(path=None, aliases_path=None, gloss_path=None, inn_en_path=None):
+    """drugs.sqlite (+ curated alias/gloss files + generated inn_en map)
+    -> DrugMap; None when the DB is missing (feature silently off).
+    Gloss sources merge with the curated file winning over the generated
+    map (owner truth beats rules)."""
+    if (path is None or aliases_path is None or gloss_path is None
+            or inn_en_path is None):
         from . import config
         path = path or config.DRUGS_DB
         aliases_path = aliases_path or config.DRUG_ALIASES_PATH
         gloss_path = gloss_path or config.INN_GLOSS_PATH
+        inn_en_path = inn_en_path or config.INN_EN_PATH
     p = Path(path)
     if not p.exists():
         return None
@@ -339,5 +359,7 @@ def load(path=None, aliases_path=None, gloss_path=None):
         rows = con.execute("select trade_name, inn from drugs").fetchall()
     finally:
         con.close()
+    glosses = _load_inn_en(Path(inn_en_path))
+    glosses.update(_load_flat(Path(gloss_path)))  # curated holes win
     return DrugMap(rows, aliases=_load_flat(Path(aliases_path)),
-                   glosses=_load_flat(Path(gloss_path)))
+                   glosses=glosses)

@@ -210,7 +210,7 @@ class TestGlosses(unittest.TestCase):
                 "# gloss\nлевоментола раствор в ментилизовалерате:"
                 " levomenthol in menthyl isovalerate\n", encoding="utf-8")
             m = load(path=p, aliases_path=Path(td) / "no-aliases.yaml",
-                     gloss_path=g)
+                     gloss_path=g, inn_en_path=Path(td) / "no-inn-en.json")
             self.assertEqual(
                 m.lookup("как действует валидол")[0]["en"],
                 "levomenthol in menthyl isovalerate")
@@ -253,7 +253,9 @@ class TestLoad(unittest.TestCase):
             a = Path(td) / "aliases.yaml"
             a.write_text("# comment\nвалерьянка: Валерианы настойка\n",
                          encoding="utf-8")
-            m = load(path=p, aliases_path=a)
+            m = load(path=p, aliases_path=a,
+                     gloss_path=Path(td) / "no-gloss.yaml",
+                     inn_en_path=Path(td) / "no-inn-en.json")
             hit = m.lookup("валерьянка помогает?")
             self.assertEqual(hit[0]["trade"], "Валерианы настойка")
 
@@ -266,11 +268,54 @@ class TestLoad(unittest.TestCase):
                         ("Кагоцел", "меглюмина акридонацетат"))
             con.commit()
             con.close()
-            m = load(path=p, aliases_path=Path(td) / "nope.yaml")
+            m = load(path=p, aliases_path=Path(td) / "nope.yaml",
+                     gloss_path=Path(td) / "no-gloss.yaml",
+                     inn_en_path=Path(td) / "no-inn-en.json")
             self.assertEqual(m.lookup("кагоцел?"),
                              [{"trade": "Кагоцел",
                                "inn": "меглюмина акридонацетат",
                                "token": "кагоцел"}])
+
+    def test_generated_map_and_curated_gloss_merge(self):
+        # the generated inn_en.json glosses the convertible mass; the
+        # curated gloss file covers the true WHO holes and OVERRIDES it
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "drugs.sqlite"
+            con = sqlite3.connect(str(p))
+            con.execute("create table drugs (trade_name text, inn text)")
+            con.executemany("insert into drugs values (?, ?)", [
+                ("Дексазон", "Дексаметазон"),
+                ("Загадин", "Загадочный комплекс"),
+            ])
+            con.commit()
+            con.close()
+            gen = Path(td) / "inn_en.json"
+            gen.write_text('{"meta": {}, "entries": {'
+                           '"дексаметазон": "dexamethasone", '
+                           '"загадочный комплекс": "GENERATED"}}',
+                           encoding="utf-8")
+            cur = Path(td) / "gloss.yaml"
+            cur.write_text("загадочный комплекс: CURATED\n", encoding="utf-8")
+            m = load(path=p, aliases_path=Path(td) / "no.yaml",
+                     gloss_path=cur, inn_en_path=gen)
+            self.assertEqual(m.lookup("дозировка дексазона")[0]["en"],
+                             "dexamethasone")
+            self.assertEqual(m.lookup("про загадин")[0]["en"], "CURATED")
+
+    def test_load_broken_generated_map_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "drugs.sqlite"
+            con = sqlite3.connect(str(p))
+            con.execute("create table drugs (trade_name text, inn text)")
+            con.execute("insert into drugs values (?, ?)",
+                        ("Дексазон", "Дексаметазон"))
+            con.commit()
+            con.close()
+            gen = Path(td) / "inn_en.json"
+            gen.write_text("{not json", encoding="utf-8")
+            m = load(path=p, aliases_path=Path(td) / "no.yaml",
+                     gloss_path=Path(td) / "no-gloss.yaml", inn_en_path=gen)
+            self.assertNotIn("en", m.lookup("дозировка дексазона")[0])
 
 
 if __name__ == "__main__":
