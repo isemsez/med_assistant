@@ -120,8 +120,16 @@ final answer = raw answer + appendix block (local PDF links only)
   names' first word; «нурофен» → ибупрофен). When nothing matched:
   curated aliases (`data/drug_aliases.yaml` — owner-curated truth, value =
   register trade name or a direct МНН for register holes like кагоцел →
-  меглюмина акридонацетат), then a tight typo tier (Levenshtein ≤2, same
-  first 3 chars, token ≥7 chars, unambiguous keys only). Matches are
+  меглюмина акридонацетат), then a tight typo tier (Levenshtein ≤1 since
+  2026-10-15 — dist 2 matched «перкуссии»→«пертусси» and grounded
+  Пертуссин in a cardiology answer; same first 3 chars, token ≥7 chars,
+  unambiguous keys only). A shared stoplist suppresses disease-stem
+  collisions in both the dict and typo tiers (owner decision 2026-10-15:
+  brand names are built on disease stems — «артроза»→Артрозан,
+  «витамины»→Витамин D3, «бронхите»→Бронхо-мунал, «диабетом»→Диабетон
+  МВ, «подагра»→ПОДАГРУМ all fired live; exact tokens only, never
+  prefixes — disease and drug inflections are distinct tokens, a
+  «бронхит*» prefix would block the real drug Бронхитол). Matches are
   deduped and capped (`DRUG_PS_MAX`). Every P.S. line anchors the
   doctor's own word to the register row (`token`/`via`) — without the
   anchor the 4B re-identifies the drug from its own prior (валидол →

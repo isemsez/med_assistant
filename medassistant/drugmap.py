@@ -24,8 +24,15 @@ matching the names' first word; then stable). When nothing matched at all:
 the curated alias table `data/drug_aliases.yaml` (value = register trade
 name resolved through this dict, or a direct МНН for register holes — the
 file is owner-curated truth, never auto-extended), then a tight typo tier
-(Levenshtein ≤2, same first 3 chars, token ≥7 chars, key must be
-unambiguous). Results are deduped and capped.
+(Levenshtein ≤1 since 2026-10-15 — dist 2 matched «перкуссии»→«пертусси»
+and grounded Пертуссин in a cardiology answer; same first 3 chars, token
+≥7 chars, key must be unambiguous). A shared stoplist suppresses
+disease-stem collisions in both the dict and typo tiers (owner decision
+2026-10-15: brand names are built on disease stems — «артроза»→Артрозан,
+«витамины»→Витамин D3, «диабетом»→Диабетон МВ — so inflected disease
+words collide at any distance; disease and drug inflections are distinct
+tokens, exact stoplist entries never block the drug forms). Results are
+deduped and capped.
 """
 
 import re
@@ -41,18 +48,45 @@ MAX_TOKENS = 5                  # longer register names are descriptive noise
 KEY_MIN = 3                     # keys shorter than this never exist
 TOKEN_MIN = 5                   # question tokens shorter never match a key
 FUZZY_TOKEN_MIN = 7             # the typo tier needs a longer token
-FUZZY_MAX_DIST = 2              # Levenshtein
+FUZZY_MAX_DIST = 1              # Levenshtein; owner decision 2026-10-15:
+                                 # dist 2 matched «перкуссии»→«пертусси» and
+                                 # grounded Пертуссин in a cardiology answer
 FUZZY_HEAD = 3                  # token and key must share the first N chars
 PLACEHOLDER_INNS = {"", "~", "-", "—", "?"}
 TRADE_MARKS = "®™"              # stripped from display names
 DEFAULT_CAP = 5
 
 # Common question words that must never match a key (empirical; extend per
-# validation — a false positive costs only a справочно line). «истори*» forms
-# sit within Levenshtein-2 of the key «истурис» (Истуриса — осилодростат) and
-# fired the typo tier on «перескажи его историю».
-STOP_WORDS = {"таблетки", "таблеток", "препарата", "препараты", "железо",
-              "история", "истории", "историю", "историй"}
+# validation — a false positive injects a wrong drug into the answerer's
+# context, and the 4B weaves it into the answer). Exact tokens only, NEVER
+# prefixes: disease and drug inflections are distinct tokens («диабетом»
+# болезнь vs «диабетоном» лекарство, «витамины» vs «витамин» в «витамин
+# д3»), so a disease-form entry leaves the drug form intact — but a
+# «бронхит*» prefix would block the real drug Бронхитол. «истори*» forms
+# fired the typo tier on «перескажи его историю» at the old dist 2; inert
+# at dist 1, kept as belt-and-braces. The disease-stem families below
+# (owner decision 2026-10-15) collided live in the dict tier and/or at
+# dist 1: brand names are built on disease stems (Артрозан←артроз,
+# Диабетон←диабет, Витамин D3←витамин, Бронхо-мунал←бронх-,
+# ПОДАГРУМ←подагра).
+STOP_WORDS = {
+    "таблетки", "таблеток", "препарата", "препараты", "железо",
+    "история", "истории", "историю", "историй",
+    # артроз*: «лечение артроза» grounded Артрозан/Артра
+    "артроз", "артроза", "артрозе", "артрозу", "артрозом",
+    "артрозов", "артрозам", "артрозах",
+    # бронхит*: «при бронхите» grounded Бронхо-мунал (key «бронх»)
+    "бронхит", "бронхита", "бронхите", "бронхиту", "бронхитом",
+    "бронхитов", "бронхитам", "бронхитах",
+    # витамин* plural/adjective: «какие витамины» grounded Витамин D3;
+    # singular forms stay — real «витамин д3» questions
+    "витамины", "витаминов", "витаминам", "витаминах", "витаминами",
+    "витаминные", "витаминных",
+    # диабет*: «при диабете» grounded Диабетон МВ (key «диабето»)
+    "диабета", "диабете", "диабету", "диабетом",
+    # подагр*: «подагра» grounded ПОДАГРУМ / Подагрель
+    "подагра", "подагре", "подагры", "подагру",
+}
 
 
 def _norm(text):

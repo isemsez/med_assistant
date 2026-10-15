@@ -26,6 +26,16 @@ ROWS = [
     ("Железо Комплекс", "Железа фумарат"),
     ("Кагоцел®", "~"),                              # placeholder МНН: not keyed
     ("Истуриса®", "Осилодростат"),  # key «истурис»: Levenshtein-2 of «историю»
+    ("Пертуссин", "Тимьяна ползучего травы экстракт+Калия бромид"),
+    # disease-stem brand names (2026-10-15 stoplist work): keys collide
+    # with inflected disease words in the dict tier and/or at dist 1
+    ("Артрозан", "Мелоксикам"),                     # key «артроза»
+    ("Артра", "Глюкозамин+Хондроитина сульфат"),    # key «артр»
+    ("Витамин D3", "Колекальциферол"),              # key «витами»
+    ("Бронхо-мунал", "Лизаты бактерий"),            # key «бронх»
+    ("Диабетон МВ", "Гликлазид"),                   # key «диабето»
+    ("ПОДАГРУМ", "Фебуксостат"),                    # key «подагру»
+    ("Подагрель", "Фебуксостат"),                   # key «подагрел»
 ]
 
 ALIASES = {"валерьянка": "Валерианы настойка",  # value = register trade name
@@ -123,7 +133,7 @@ class TestAmbiguity(unittest.TestCase):
                               "token": "нурофен"}])
 
     def test_non_adjacent_plus_does_not_restrict(self):
-        m = dmap().lookup("плюс к нурофену витамин")
+        m = dmap().lookup("плюс к нурофену аспирин")
         self.assertEqual(m, [{"trade": "Нурофен", "inn": "ибупрофен",
                               "token": "нурофену"}])
 
@@ -162,11 +172,23 @@ class TestAliases(unittest.TestCase):
         self.assertEqual(dmap().lookup("валерьянка — это лекарство?"), [])
 
 
-class TestFuzzy(unittest.TestCase):
-    def test_tight_typo_matches_unambiguous_key(self):
-        m = dmap().lookup("дозировка азитромицна")  # missing и
+class TestTypoTier(unittest.TestCase):
+    def test_dist1_typo_matches_unambiguous_key(self):
+        m = dmap().lookup("дозировка азитромица")  # и→а, one edit
         self.assertEqual(m, [{"trade": "Азитромицин", "inn": "азитромицин",
-                              "token": "азитромицна"}])
+                              "token": "азитромица"}])
+
+    def test_dist2_typo_no_longer_matches(self):
+        # «азитромицна» is Levenshtein-2 of the key «азитромици» — the
+        # tier was tightened to dist 1 (owner decision 2026-10-15)
+        self.assertEqual(dmap().lookup("дозировка азитромицна"), [])
+
+    def test_percussion_incident_regression(self):
+        # «перкуссии» is Levenshtein-2 of the key «пертусси» (Пертуссин) —
+        # the 2026-10-15 incident: the P.S. grounded Пертуссин in a
+        # cardiology question and the 4B wove its bromide into the answer
+        self.assertEqual(
+            dmap().lookup("как тона могут меняться при перкуссии"), [])
 
     def test_short_token_never_fuzzy(self):
         self.assertEqual(dmap().lookup("нурофн дозировка"), [])
@@ -178,17 +200,43 @@ class TestFuzzy(unittest.TestCase):
 
     def test_common_word_history_not_fuzzy(self):
         # «историю» is Levenshtein-2 of the unambiguous key «истурис»
-        # (Истуриса — осилодростат): the stoplist must suppress it in every
-        # inflected 7-char form; 8+ char forms are already distance ≥3
+        # (Истуриса — осилодростат): stoplisted, and dist 2 no longer
+        # matches anyway
         self.assertEqual(
             dmap().lookup("в кратце перескажи его историю"), [])
-        for form in ("история", "истории", "историй"):
-            self.assertEqual(dmap().lookup(f"перескажи {form} болезни"), [])
 
     def test_real_drug_still_matches_despite_history_stopword(self):
         m = dmap().lookup("дозировка истурисы")
         self.assertEqual(m, [{"trade": "Истуриса", "inn": "осилодростат",
                               "token": "истурисы"}])
+
+
+class TestStemStoplist(unittest.TestCase):
+    """Disease-stem collisions (owner decision 2026-10-15): brand names
+    built on disease stems collide with inflected disease words in the
+    dict tier and at dist 1. Exact stoplist tokens suppress the disease
+    forms; drug inflections are distinct tokens and still ground."""
+
+    def test_disease_forms_never_ground(self):
+        for q in ("лечение артроза", "что делать при артрозе",
+                  "какие витамины при беременности",
+                  "обострение бронхита", "жар при бронхите",
+                  "диета при сахарном диабете", "проблемы с диабетом",
+                  "подагра чем лечить", "что принять при подагре"):
+            self.assertEqual(dmap().lookup(q), [], q)
+
+    def test_drug_forms_still_ground(self):
+        cases = {
+            "дозировка артрозана": "Артрозан",
+            "витамин д3 норма": "Витамин D3",
+            "бронхо мунал состав": "Бронхо-мунал",
+            "лечение диабетоном": "Диабетон МВ",
+            "подагрум цена": "ПОДАГРУМ",
+            "подагрель дозировка": "Подагрель",
+        }
+        for q, trade in cases.items():
+            m = dmap().lookup(q)
+            self.assertEqual([x["trade"] for x in m], [trade], q)
 
 
 class TestPairColumn(unittest.TestCase):
