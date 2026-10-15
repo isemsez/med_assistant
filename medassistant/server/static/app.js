@@ -14,7 +14,10 @@ let activeStream = null;
 function fmt(text) {
   return esc(text)
     .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-    .replace(/\*([^*\n]+)\*/g, "<i>$1</i>");
+    // emphasis * must open before a non-space and close after one (CommonMark
+    // edge rule) — otherwise list-bullet markers pair with real emphasis and
+    // italicize whole bullet lines
+    .replace(/\*(\S(?:[^*\n]*[^\s*])?)\*/g, "<i>$1</i>");
 }
 
 function pdfPayload(text) {
@@ -228,10 +231,11 @@ async function loadSession(id) {
       const node = msgNode(m.role, m.content, m.id, m.kind);
       if (m.role === "assistant") {
         if (m.reasoning) {
-          // restored from the store: collapsed, the physician can expand
+          // restored from the store: collapsed, the physician can expand;
+          // rendered with fmt() so markdown emphasis matches the answer
           const t = makeThinkingBlock(node);
           // legacy stored reasoning carries the stray leading "thought\n"
-          t.body.textContent = m.reasoning.replace(/^thought\n/, "");
+          t.body.innerHTML = fmt(m.reasoning.replace(/^thought\n/, ""));
         }
         if (m.appendix) renderAppendix(m.appendix, node);
       } else if (m.drug_map && m.drug_map.length) {
@@ -414,6 +418,7 @@ async function send(question) {
   const body = asst.querySelector(".body");
   body.style.display = "none"; // the answer block appears only when the answer starts
   let thinking = null;
+  let thinkRaw = ""; // raw reasoning text; rendered through fmt() like the answer
   let statusLine = null;
   let answer = "";
   let anchor = asst; // pdf turns retarget status/sources/error nodes to the user bubble
@@ -507,7 +512,8 @@ async function send(question) {
         const data = JSON.parse(ev.data);
         if (ev.event === "reasoning") {
           if (!thinking) thinking = makeThinkingBlock(asst);
-          thinking.body.textContent += data.t;
+          thinkRaw += data.t;
+          thinking.body.innerHTML = fmt(thinkRaw);
           thinking.open();
           autoScroll();
         } else if (ev.event === "reasoning_reset") {
@@ -515,7 +521,8 @@ async function send(question) {
           // the reasoning from scratch (or the turn died on a second loop) —
           // drop the looped garbage, leave a one-line trace of the restart
           if (!thinking) thinking = makeThinkingBlock(asst);
-          thinking.body.textContent = data.note ? data.note + "\n\n" : "";
+          thinkRaw = data.note ? data.note + "\n\n" : "";
+          thinking.body.innerHTML = fmt(thinkRaw);
         } else if (ev.event === "drug_map") {
           // register-grounded МНН block under the question bubble; the
           // same renderer restores it from m.drug_map after a reload
