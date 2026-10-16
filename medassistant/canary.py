@@ -65,14 +65,15 @@ def answer_with_retry(pipe, question, max_tokens, progress=False):
     helper — the live pipeline never retries at the semantic level."""
     budget, answer = max_tokens, ""
     for _ in (1, 2):
-        parts, seen = [], 0
+        parts, seen, dots = [], 0, 0
         for ev in pipe.stream_answer(question, max_tokens=budget):
             if ev["type"] == "content":
                 parts.append(ev["text"])
                 seen += len(ev["text"])
                 if progress and seen // 400 > (seen - len(ev["text"])) // 400:
                     print(".", end="", flush=True)
-        if progress:
+                    dots += 1
+        if progress and dots:
             print(flush=True)
         answer = "".join(parts)
         if answer.strip():
@@ -96,9 +97,11 @@ def e2e_phase(max_tokens):
     if not cards:
         return False, "index search returned no candidates"
     expected = cards[0]
-    print(f"  expected guideline (top-1, deterministic search): "
-          f"{expected['code_version']} «{expected['name']}» "
+    print()
+    print("  expected guideline (top-1, deterministic search):")
+    print(f"    {expected['code_version']} «{expected['name']}» "
           f"score={expected['score']}")
+    print()
     if stem not in (expected["name"] or "").lower():
         return False, (f"top-1 search hit for «{disease}» is unexpected: "
                        f"«{expected['name']}» — index or embed model regressed")
@@ -109,7 +112,7 @@ def e2e_phase(max_tokens):
         return False, f"answerer failed: {e}"
     if not answer.strip():
         return False, "answerer returned an empty answer twice"
-    print(f"  answer: {len(answer)} chars in {time.monotonic() - t0:.0f}s")
+    print(f"  answerer model: {len(answer)} chars in {time.monotonic() - t0:.0f}s")
 
     t1 = time.monotonic()
     result = pipe.run_appendix(question, answer)
@@ -140,6 +143,7 @@ def main(e2e=True, max_tokens=3072):
         print(f"  E2E: {'ok' if e2e_ok else detail}")
         ok = ok and e2e_ok
     print("\nCANARY OK" if ok else "\nCANARY FAIL")
+    print()
     return ok
 
 

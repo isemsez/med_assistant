@@ -14,7 +14,7 @@
 #   powershell -File start_chat.ps1 -Canary        # force the startup canary
 #
 # Launch modes (owner decision 2026-10-04): BARE (no arguments) = hand-click
-# (Explorer / Total Commander double-click): a 5 s canary offer appears
+# (Explorer / Total Commander double-click): a 4 s canary offer appears
 # after the backends start (any key runs it, timeout skips); a SMOOTH run
 # closes the console on its own after a short linger (10 s after a start,
 # 2 s after a stop), on ANY error the window stays open until a keypress -
@@ -140,7 +140,11 @@ function Request-CanaryRun([int]$seconds = 4) {
         }
     }
     catch { }   # input redirected / no real console: fall through to skip
-    if ($run) { Write-Host "`r  canary will run                       " }
+    if ($run) {
+        # erase the countdown line - the next printed line (the canary banner)
+        # takes its place; no extra "will run" announcement
+        Write-Host ("`r" + (" " * 40) + "`r") -NoNewline
+    }
     else {
         Write-Host "`r  canary skipped                         `r"
         Write-Host ""
@@ -294,7 +298,7 @@ try {
         if ($Foreground) {
             Write-Warning "-Foreground applies only to starting; stopping instead."
         }
-        "Stopping assistant (re-run to start again):"
+        "Stopping assistant:"
         foreach ($c in $components) { Stop-ByPort $c.Port $c.Proc $c.Label $c.Dir }
         Stop-OrphanRunners $ollamaDir
         foreach ($c in $components) {
@@ -347,16 +351,17 @@ try {
 
     if (-not (Test-Path $py)) { Write-Warning ".venv not found - see AGENTS.md Setup"; Quit 1 }
 
-    # 3) startup canary (owner decision 2026-10-04). The 5 s offer appears only
+    # 3) startup canary (owner decision 2026-10-04). The 4 s offer appears only
     #    on BARE runs (hand-click); any argument means CLI and skips it,
     #    -Canary forces the run. Runs before the web app: the whole chain is
     #    verified (and the models warmed) first; on failure the stack still
     #    comes up and the script exits 1 at the very end.
     $runCanary = [bool]$Canary
-    if (-not $runCanary -and -not $SkipCanary -and $NoArgs) { $runCanary = Request-CanaryRun 5 }
+    if (-not $runCanary -and -not $SkipCanary -and $NoArgs) { $runCanary = Request-CanaryRun 4 }
     $canaryFailed = $false
     if ($runCanary) {
         "running canary (health checks + one E2E question, ~40 s)..."
+        ""
         Push-Location $root
         try { & $py -m medassistant canary }
         finally { Pop-Location }
