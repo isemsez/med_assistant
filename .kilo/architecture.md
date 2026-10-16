@@ -153,7 +153,10 @@ final answer = raw answer + appendix block (local PDF links only)
   The prompt stays **silent** about footnotes — no negative instruction
   either: the model has no such instinct to suppress, and naming the behavior
   in a negation would only plant it.
-- Today: main Ollama instance, CPU, thinking on, 2048-token budget.
+- Today: main Ollama instance, CPU, thinking on, 3072-token budget
+  (raised from 2048 on 2026-10-16: num_predict — not num_ctx — caps output,
+  and a verbose thinking phase ate the budget, truncating the answer
+  mid-word at exactly 2048 generated tokens).
 - **Thinking-loop watchdog** (owner decision 2026-10-06; detector
   redefined 2026-10-14): the reasoning stream occasionally collapses
   into a tail-spin — the same unit repeated back-to-back — that burns

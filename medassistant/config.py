@@ -81,7 +81,7 @@ CARD_MAX_CHARS = int(os.environ.get("CARD_MAX_CHARS", "8000"))
 # missing DB silently disables the feature; DRUG_PS_MAX caps matches.
 DRUG_PS_MAX = int(os.environ.get("DRUG_PS_MAX", "5"))
 
-ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "2048"))
+ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "3072"))
 LABELER_EXTRACT_MAX_TOKENS = int(os.environ.get("LABELER_EXTRACT_MAX_TOKENS", "200"))
 LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "128"))
 
