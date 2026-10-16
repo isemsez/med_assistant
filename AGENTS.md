@@ -14,7 +14,12 @@ UX (architecture.md §6): the answerer's reasoning
 streams into a collapsible «Размышления модели» block (auto-collapses when the
 answer starts); the appendix machinery shows a live stage line («Поиск болезней
 в тексте…» → «Ищу соответствующие pdf.» → …) and the composer unblocks
-as soon as the answer text is done; when the labeler filter runs, the candidate
+as soon as the answer text is done; while the answerer generates, the send
+button is a Stop control («Стоп», Esc too; owner decision 2026-10-15) —
+`POST /api/sessions/{id}/stop` drops the Ollama connection (generation
+cancels instantly, even mid-prefill), deletes the half-finished turn and
+returns the question to the composer for editing (answerer phase only; the
+appendix always runs to completion); when the labeler filter runs, the candidate
 pdf cards stream to the page immediately after search (search is cheap, the
 labeler call is not) and are filtered to the verified picks client-side when
 the appendix payload arrives (cards are name+link only — retrieval scores
@@ -162,7 +167,7 @@ powershell -File start_chat.ps1 -Canary        # force the startup canary
 
 Launch modes (owner decision 2026-10-04): BARE invocation (no arguments) =
 hand-clicked (Explorer / Total Commander double-click) — after the backends
-start, a 5 s countdown offers the canary (press any key to run it, timeout
+start, a 4 s countdown offers the canary (press any key to run it, timeout
 skips); a smooth run closes the console on its own after a short linger
 (10 s after a start, 2 s after a stop), while on any failure — canary
 failure or an unexpected error — the window stays open until a key is
@@ -212,7 +217,7 @@ Answer-file rows: `{"question", "raw_answer"}` (live labeler + search) or with
 - `python -m medassistant canary` — the same checks plus one E2E question
   through the real pipeline (`--no-e2e` for fast checks only); exit 1 on
   failure. Also the opt-in startup check of `start_chat.ps1` (`-Canary` /
-  5 s keypress countdown on a bare hand-click launch; owner decision
+  4 s keypress countdown on a bare hand-click launch; owner decision
   2026-10-04).
 - `python -m medassistant regression` — `tests/goldens.jsonl` against live
   endpoints: deterministic search-tier rows (disease → expected top-1

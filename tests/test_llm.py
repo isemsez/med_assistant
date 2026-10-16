@@ -1,4 +1,7 @@
 import json
+import socket
+import threading
+import time
 import unittest
 
 import httpx
@@ -226,6 +229,168 @@ class TestChatStream(unittest.TestCase):
         list(llm.chat_stream(self.EP, []))
         self.assertNotIn("frequency_penalty",
                          json.loads(self.last_kw["content"]))
+
+
+class _SSEServer:
+    """Minimal real HTTP/SSE server on 127.0.0.1 for the cancel tests: sends
+    response headers, then either stays silent (the prefill window) or
+    streams `data:` lines on a chunked body. Sets .client_gone when the peer
+    (httpx) drops the connection; counts accepted requests (no-retry check).
+    """
+
+    LINE = 'data: {"choices":[{"delta":{"content":"ток"}}]}\n\n'.encode()
+
+    def __init__(self, silent_s=0.0, line_interval_s=0.03, lines=400):
+        self.silent_s = silent_s
+        self.line_interval_s = line_interval_s
+        self.n_lines = lines
+        self.requests = 0
+        self.client_gone = threading.Event()
+        self._sock = socket.socket()
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(4)
+        self.port = self._sock.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def close(self):
+        self._sock.close()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                return  # listener closed — test over
+            self.requests += 1
+            try:
+                self._handle(conn)
+            except OSError:  # reset while idle — the drop we watch for
+                self.client_gone.set()
+            finally:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+
+    def _handle(self, conn):
+        conn.settimeout(20)
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = conn.recv(4096)
+            if not chunk:
+                return
+            head += chunk
+        head, _, rest = head.partition(b"\r\n\r\n")
+        # drain the request body: leftover body bytes must not leak into the
+        # silence phase's EOF watch below
+        clen = 0
+        for line in head.split(b"\r\n"):
+            if line.lower().startswith(b"content-length:"):
+                clen = int(line.split(b":", 1)[1])
+        while len(rest) < clen:
+            chunk = conn.recv(4096)
+            if not chunk:
+                return
+            rest += chunk
+        conn.sendall(b"HTTP/1.1 200 OK\r\n"
+                     b"Content-Type: text/event-stream\r\n"
+                     b"Transfer-Encoding: chunked\r\n\r\n")
+        if self.silent_s:
+            # prefill window: nothing flows; a FIN from the client shows up
+            # as an empty recv, a reset as OSError — either is the drop
+            conn.settimeout(self.silent_s + 15)
+            if conn.recv(1) == b"":
+                self.client_gone.set()
+            return
+        for _ in range(self.n_lines):
+            if self.client_gone.is_set():
+                return
+            try:
+                conn.sendall(b"%x\r\n" % len(self.LINE) + self.LINE + b"\r\n")
+            except OSError:
+                self.client_gone.set()
+                return
+            time.sleep(self.line_interval_s)
+        conn.sendall(b"0\r\n\r\n")  # end of the chunked body
+
+
+class TestStreamCancel(unittest.TestCase):
+    """StreamCancel + LLMCancelled (owner decision 2026-10-15): set() drops
+    the live connection so a reader blocked in prefill wakes at once, and a
+    cancelled request is never retried."""
+
+    def _endpoint(self, port):
+        return {"base_url": f"http://127.0.0.1:{port}", "api_key": "",
+                "model": "m", "extra_body": {}}
+
+    def _stream_in_thread(self, port, cancel):
+        out = {}
+
+        def run():
+            try:
+                out["events"] = list(llm.chat_stream(
+                    self._endpoint(port), [{"role": "user", "content": "q"}],
+                    attempts=4, cancel=cancel))
+            except Exception as e:  # the expected LLMCancelled lands here
+                out["error"] = e
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        return t, out
+
+    def test_cancel_wakes_blocked_reader_and_drops_connection(self):
+        # prefill window: headers, then silence; cancel must raise
+        # LLMCancelled long before the silence ends, and the server-side
+        # peer must see the connection drop (Ollama then cancels generation)
+        srv = _SSEServer(silent_s=8.0)
+        try:
+            cancel = llm.StreamCancel()
+            t, out = self._stream_in_thread(srv.port, cancel)
+            time.sleep(0.5)  # the request reached the silent read
+            t0 = time.monotonic()
+            cancel.set()
+            t.join(timeout=5)
+            self.assertFalse(t.is_alive(), "cancel must wake the blocked reader")
+            self.assertLess(time.monotonic() - t0, 4)
+            self.assertIsInstance(out.get("error"), llm.LLMCancelled)
+            self.assertTrue(srv.client_gone.wait(timeout=10),
+                            "the generation-side peer must see the drop")
+        finally:
+            srv.close()
+
+    def test_cancel_between_lines_not_retried(self):
+        # lines flow; a cancel between two events stops at once and the
+        # transport makes exactly one request — no retry after a stop
+        srv = _SSEServer()
+        try:
+            cancel = llm.StreamCancel()
+            t, out = self._stream_in_thread(srv.port, cancel)
+            time.sleep(0.3)  # a few events yielded already
+            cancel.set()
+            t.join(timeout=5)
+            self.assertFalse(t.is_alive())
+            self.assertIsInstance(out.get("error"), llm.LLMCancelled)
+            self.assertEqual(srv.requests, 1)
+            self.assertTrue(srv.client_gone.wait(timeout=10))
+        finally:
+            srv.close()
+
+    def test_set_before_attach_fires_on_attach(self):
+        cancel = llm.StreamCancel()
+        cancel.set()
+        fired = []
+        cancel.attach(lambda: fired.append(1))
+        self.assertEqual(fired, [1])
+
+    def test_detach_removes_close(self):
+        cancel = llm.StreamCancel()
+        fired = []
+        cancel.attach(lambda: fired.append(1))
+        cancel.detach()
+        cancel.set()
+        self.assertEqual(fired, [])
+        self.assertTrue(cancel.is_set())
 
 
 class TestPayload(unittest.TestCase):

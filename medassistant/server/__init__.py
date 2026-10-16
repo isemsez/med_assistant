@@ -4,6 +4,7 @@ Run: uvicorn medassistant.server:app --host 127.0.0.1 --port 8642
 """
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -48,10 +49,38 @@ class CardPinRequest(BaseModel):
     file: str = ""  # empty clears the pin
 
 
+class Turn:
+    """One in-flight answerer turn (stop-registry entry, owner decision
+    2026-10-15). `done` flips the moment the answerer stream finishes
+    normally — stop requests skip done turns: stop is answerer-phase only,
+    the appendix machinery always runs to completion."""
+
+    def __init__(self, message_id):
+        self.cancel = llm.StreamCancel()
+        self.message_id = message_id  # the turn's user row
+        self.done = False
+
+
+def _register_turn(app, sid, turn):
+    with app.state.turns_lock:
+        app.state.turns.setdefault(sid, []).append(turn)
+
+
+def _unregister_turn(app, sid, turn):
+    with app.state.turns_lock:
+        turns = app.state.turns.get(sid)
+        if turns and turn in turns:
+            turns.remove(turn)
+            if not turns:
+                app.state.turns.pop(sid, None)
+
+
 @app.on_event("startup")
 def _wire():
     app.state.audit = audit_mod.Audit(config.AUDIT_LOG_PATH)
     app.state.store = load_store()
+    app.state.turns = {}  # session_id -> [Turn] (in-flight answerer turns)
+    app.state.turns_lock = threading.Lock()
     try:
         store_mod.backup()
     except Exception as e:  # a failed backup must never block the app
@@ -151,6 +180,28 @@ def pin_session_card(session_id: int, req: CardPinRequest):
         raise HTTPException(400, "unknown card file")
     app.state.store.set_session_card(session_id, req.file or None)
     return {"ok": True}
+
+
+@app.post("/api/sessions/{session_id}/stop")
+def stop_turn(session_id: int):
+    """Stop the session's in-flight answerer turn(s) — undo the send (owner
+    decision 2026-10-15): set() drops the Ollama connection, so generation
+    cancels at once even mid-prefill, and the stream thread deletes the
+    turn's rows and emits `stopped`. Turn-phase turns are skipped: once the
+    answer text completes, the appendix machinery runs to completion."""
+    if not app.state.store.session_exists(session_id):
+        raise HTTPException(404, "session not found")
+    with app.state.turns_lock:
+        turns = list(app.state.turns.get(session_id, []))
+    stopped = 0
+    for turn in turns:
+        if not turn.done:
+            turn.cancel.set()
+            stopped += 1
+    if stopped:
+        app.state.audit.log("user_stop", session_id=session_id,
+                            phase="answerer")
+    return {"ok": True, "stopped": stopped}
 
 
 STAGE_TEXT = {
@@ -268,66 +319,101 @@ def chat(req: ChatRequest):
             # pin the card to the session for later picker preselection
             store.set_session_card(sid, req.card)
 
-        parts, reasoning_parts, failed = [], [], False
-        t_answer = time.monotonic()
-        # medgemma's reasoning always starts with a stray "thought\n"; it
-        # arrives split across stream deltas, so it is dropped char-wise
-        drop = len("thought\n")
+        # user stop (owner decision 2026-10-15): the turn registers until the
+        # answerer stream completes; POST /api/sessions/{sid}/stop drops the
+        # Ollama connection (instant even mid-prefill). This thread alone
+        # deletes the turn's rows — the stop request only sets the flag.
+        turn = Turn(mid_user)
+        _register_turn(app, sid, turn)
+        stopped = False
         try:
-            for event in pipe.stream_answer(question, history, card=card_ctx,
-                                            drug=drug):
-                if event["type"] == "reasoning":
-                    t = event["text"]
-                    if drop:
-                        d = min(drop, len(t))
-                        t, drop = t[d:], drop - d
-                        if not t:
-                            continue
-                    reasoning_parts.append(t)
-                    yield _sse("reasoning", {"t": t})
-                elif event["type"] == "reasoning_reset":
-                    # a degenerate thinking loop was aborted upstream; the
-                    # retry restarts reasoning from scratch (2026-10-06).
-                    # The note replaces the old silent wipe so the restart
-                    # is visible (owner report 2026-10-14)
-                    reasoning_parts, drop = [], len("thought\n")
+            parts, reasoning_parts, failed = [], [], False
+            t_answer = time.monotonic()
+            # medgemma's reasoning always starts with a stray "thought\n"; it
+            # arrives split across stream deltas, so it is dropped char-wise
+            drop = len("thought\n")
+            it = pipe.stream_answer(question, history, card=card_ctx,
+                                    drug=drug, cancel=turn.cancel)
+            try:
+                for event in it:
+                    if turn.cancel.is_set():
+                        stopped = True
+                        break
+                    if event["type"] == "reasoning":
+                        t = event["text"]
+                        if drop:
+                            d = min(drop, len(t))
+                            t, drop = t[d:], drop - d
+                            if not t:
+                                continue
+                        reasoning_parts.append(t)
+                        yield _sse("reasoning", {"t": t})
+                    elif event["type"] == "reasoning_reset":
+                        # a degenerate thinking loop was aborted upstream; the
+                        # retry restarts reasoning from scratch (2026-10-06).
+                        # The note replaces the old silent wipe so the restart
+                        # is visible (owner report 2026-10-14)
+                        reasoning_parts, drop = [], len("thought\n")
+                        yield _sse("reasoning_reset", {
+                            "note": "Зацикливание размышлений — перезапускаю."})
+                    else:
+                        parts.append(event["text"])
+                        yield _sse("token", {"t": event["text"]})
+            except llm.LLMCancelled:
+                stopped = True  # the stopper thread dropped the connection
+            except llm.LLMError as e:
+                failed = True
+                aud.log("stage_stop", stop_stage="answerer", session_id=sid,
+                        error=str(e))
+                if isinstance(e, llm.LLMLoopError):
+                    # the retry looped again — drop the looped garbage and say
+                    # why the thinking block is empty before the honest failure
                     yield _sse("reasoning_reset", {
-                        "note": "Зацикливание размышлений — перезапускаю."})
-                else:
-                    parts.append(event["text"])
-                    yield _sse("token", {"t": event["text"]})
-        except llm.LLMError as e:
-            failed = True
-            aud.log("stage_stop", stop_stage="answerer", session_id=sid,
-                    error=str(e))
-            if isinstance(e, llm.LLMLoopError):
-                # the retry looped again — drop the looped garbage and say
-                # why the thinking block is empty before the honest failure
-                yield _sse("reasoning_reset", {
-                    "note": "Зацикливание размышлений — генерация прервана."})
-            yield _sse("error", {"text": "Сбой генерации ответа."})
+                        "note": "Зацикливание размышлений — генерация прервана."})
+                yield _sse("error", {"text": "Сбой генерации ответа."})
+            finally:
+                # a cooperative stop breaks mid-stream: closing the generator
+                # drops the Ollama connection (no-op on normal completion)
+                it.close()
+            if stopped or turn.cancel.is_set():
+                # undo the send: nothing is stored; the finally below deletes
+                # the question row and the client restores it into the composer
+                yield _sse("stopped", {"user_message_id": mid_user})
+                return
+            turn.done = True  # answerer finished — stop no longer applies
 
-        raw_answer = "".join(parts)
-        if not raw_answer:
-            yield _sse("done", {"session_id": sid, "message_id": None,
-                                "user_message_id": mid_user})
-            return
+            raw_answer = "".join(parts)
+            if not raw_answer:
+                yield _sse("done", {"session_id": sid, "message_id": None,
+                                    "user_message_id": mid_user})
+                return
 
-        message_id = store.add_message(
-            sid, "assistant", raw_answer,
-            reasoning="".join(reasoning_parts) or None)
-        aud.log("raw_answer", session_id=sid, answer=raw_answer,
-                dur_s=round(time.monotonic() - t_answer, 2))
-        # the answer is complete — the physician may ask the next question
-        # while the appendix machinery runs below
-        yield _sse("done", {"session_id": sid, "message_id": message_id,
-                            "user_message_id": mid_user, "failed": failed})
+            message_id = store.add_message(
+                sid, "assistant", raw_answer,
+                reasoning="".join(reasoning_parts) or None)
+            aud.log("raw_answer", session_id=sid, answer=raw_answer,
+                    dur_s=round(time.monotonic() - t_answer, 2))
+            # the answer is complete — the physician may ask the next question
+            # while the appendix machinery runs below
+            yield _sse("done", {"session_id": sid, "message_id": message_id,
+                                "user_message_id": mid_user, "failed": failed})
 
-        yield from _run_machinery(
-            sid, message_id,
-            pipe.iter_appendix(question, raw_answer, session_id=sid),
-            STAGE_TEXT)
-        store.touch(sid)
+            yield from _run_machinery(
+                sid, message_id,
+                pipe.iter_appendix(question, raw_answer, session_id=sid),
+                STAGE_TEXT)
+            store.touch(sid)
+        finally:
+            _unregister_turn(app, sid, turn)
+            if not turn.done and (stopped or turn.cancel.is_set()):
+                # the stopped turn's rows go now — even when the client already
+                # disconnected (finally still runs on GeneratorExit, and the
+                # dropped Ollama connection guarantees this thread woke up)
+                try:
+                    store.truncate_from(sid, mid_user)
+                except Exception as e:
+                    aud.log("stop_cleanup_failed", session_id=sid,
+                            error=repr(e))
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",

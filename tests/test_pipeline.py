@@ -620,5 +620,33 @@ class TestStreamAnswerLoopRetry(unittest.TestCase):
         self.assertEqual(self.calls, [None])
 
 
+class TestStreamAnswerCancel(unittest.TestCase):
+    """stream_answer(cancel=...) passthrough (owner decision 2026-10-15): a
+    user stop reaches llm.chat_stream and raises LLMCancelled out of the
+    generator — never caught by the thinking-loop retry."""
+
+    EP = {"base_url": "http://x", "api_key": "", "model": "m", "extra_body": {}}
+
+    def test_cancel_passthrough_raises_without_loop_retry(self):
+        from unittest.mock import patch
+        pipe = Pipeline(candidate=self.EP)
+        cancel = llm.StreamCancel()
+        calls = []
+
+        def fake_stream(endpoint, messages, max_tokens=None, freq_penalty=None,
+                        cancel=None, **kw):
+            calls.append(freq_penalty)
+            yield {"type": "content", "text": "частичный"}
+            raise llm.LLMCancelled("cancelled by user")
+
+        with patch.object(llm, "chat_stream", fake_stream):
+            events = []
+            with self.assertRaises(llm.LLMCancelled):
+                for ev in pipe.stream_answer(Q, cancel=cancel):
+                    events.append(ev)
+        self.assertEqual(events, [{"type": "content", "text": "частичный"}])
+        self.assertEqual(calls, [None], "a cancelled turn is never retried")
+
+
 if __name__ == "__main__":
     unittest.main()

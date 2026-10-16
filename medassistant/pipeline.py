@@ -117,11 +117,14 @@ class Pipeline:
                 + [{"role": "user", "content": content}])
 
     def stream_answer(self, question, history=None, max_tokens=None, card=None,
-                      drug=None):
+                      drug=None, cancel=None):
         """Yield answerer events: {"type": "reasoning"|"content", "text": ...},
         plus {"type": "reasoning_reset"} when a degenerate thinking loop was
         aborted and the stream restarted (owner decision 2026-10-06: one
         anti-repetition retry, then the error surfaces — see llm.chat_stream).
+        `cancel` (llm.StreamCancel, owner decision 2026-10-15) aborts the
+        stream with llm.LLMCancelled (user stop — dropped connection, never
+        retried).
         Raises llm.LLMError on transport failure."""
         config.require(self.candidate, "CANDIDATE")
         for attempt in range(1 + config.LOOP_RETRIES):
@@ -131,7 +134,8 @@ class Pipeline:
                     self._messages(question, history, card, drug),
                     max_tokens=max_tokens or config.ANSWERER_MAX_TOKENS,
                     freq_penalty=(config.LOOP_RETRY_FREQ_PENALTY
-                                  if attempt else None))
+                                  if attempt else None),
+                    cancel=cancel)
                 return
             except llm.LLMLoopError as e:
                 if attempt >= config.LOOP_RETRIES:

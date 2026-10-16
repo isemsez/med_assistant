@@ -8,6 +8,13 @@ let loadPromise = Promise.resolve();
 // while it streams, the store holds at most the question (the assistant
 // row with its reasoning lands only when the answer completes).
 let activeStream = null;
+// Stop control (owner decision 2026-10-15): while the answerer generates,
+// #send morphs into «Стоп» (Esc works too); a click POSTs
+// /api/sessions/{id}/stop — the server drops the Ollama connection, deletes
+// the turn's rows and ends the stream with a `stopped` event, which puts
+// the question back into the composer for editing. Answerer phase only.
+let stopping = false; // stop clicked for the in-flight turn (one shot)
+let sendSeq = 0; // guards composer state when streams overlap (send during appendix)
 
 // esc() lives in util.js, loaded before this script.
 
@@ -399,11 +406,37 @@ function makeThinkingBlock(asst) {
   };
 }
 
+function setSendMode(mode) { // "send" | "stop" | "stopping"
+  const btn = $("#send");
+  btn.classList.toggle("stop", mode !== "send");
+  btn.disabled = mode === "stopping";
+  btn.textContent = mode === "send" ? "Отправить"
+    : mode === "stop" ? "Стоп" : "Останавливаю…";
+}
+
+async function stopTurn() {
+  if (!state.busy || !activeStream || activeStream.done || stopping) return;
+  stopping = true;
+  setSendMode("stopping");
+  try {
+    await api(`/api/sessions/${activeStream.sid}/stop`, { method: "POST" });
+    // the stream itself ends with a `stopped` event (or an honest failure)
+  } catch (e) {
+    stopping = false; // the stream keeps running — let the physician retry
+    setSendMode("stop");
+    noteNode(`Не удалось остановить: ${e.message}`, true,
+             activeStream.wrap || null);
+  }
+}
+
 async function send(question) {
   await loadPromise; // never race a session history load (it would wipe our nodes)
   state.busy = true;
   state.streamActive = true; // covers the whole SSE stream, appendix included
-  $("#send").disabled = true;
+  const seq = ++sendSeq;
+  stopping = false;
+  let gotStopped = false;
+  setSendMode("stop");
   // The whole live turn — question bubble, thinking, answer, status lines,
   // candidate cards, sources — lives in ONE wrapper. A session switch wipes
   // #messages and detaches the wrapper whole; coming back re-attaches it and
@@ -553,7 +586,7 @@ async function send(question) {
         } else if (ev.event === "done") {
           // answer complete: the composer unblocks while the appendix finishes
           state.busy = false;
-          $("#send").disabled = false;
+          setSendMode("send");
           cursorOn = false;
           render();
           // ids are set even while detached: they must survive a session
@@ -566,6 +599,19 @@ async function send(question) {
           clearCandidates(); // provisional list -> final filtered sources
           renderAppendix(data, anchor);
           autoScroll();
+        } else if (ev.event === "stopped") {
+          // undo the send (owner decision 2026-10-15): the server deleted the
+          // turn's rows; drop the live wrapper and put the question back into
+          // the composer — but only when this turn is the one on screen (a
+          // background stream in another session must not clobber the input)
+          gotStopped = true;
+          stopping = false;
+          const onScreen = wrap.isConnected && state.current === sid;
+          wrap.remove();
+          if (onScreen) {
+            $("#question").value = question;
+            $("#question").focus();
+          }
         } else if (ev.event === "error") {
           clearStatus();
           clearCandidates();
@@ -585,10 +631,20 @@ async function send(question) {
     body.innerHTML = fmt(answer);
     noteNode(`Ошибка запроса: ${e.message}`, true, anchor);
   } finally {
-    state.busy = false;
-    state.streamActive = false;
-    $("#send").disabled = false;
-    activeStream = null; // the turn is fully stored now — normal render takes over
+    const unconfirmed = stopping && !gotStopped; // stop sent, no `stopped` event
+    if (seq === sendSeq) {
+      // only the LATEST turn may govern the composer — an earlier turn's
+      // stream can still be finishing its appendix after a newer send began
+      state.busy = false;
+      state.streamActive = false;
+      setSendMode("send");
+      stopping = false;
+      activeStream = null; // the turn is fully stored now — normal render takes over
+      if (unconfirmed) {
+        noteNode("Остановка не подтвердилась — ход сохранён; " +
+                 "можно вернуться к вопросу ↩.", false, null);
+      }
+    }
     await refreshSessions();
     autoScroll();
   }
@@ -598,12 +654,18 @@ async function send(question) {
 
 $("#composer").addEventListener("submit", (e) => {
   e.preventDefault();
+  if (state.busy) { stopTurn(); return; } // the send button is «Стоп» while busy
   const q = $("#question").value.trim();
-  if (!q || state.busy) return;
+  if (!q) return;
   $("#question").value = "";
   send(q);
 });
 $("#question").addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.busy) {
+    e.preventDefault();
+    stopTurn();
+    return;
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     $("#composer").requestSubmit();

@@ -6,6 +6,7 @@ output) are raised to the caller and never retried here.
 """
 
 import json
+import threading
 import time
 
 import httpx
@@ -24,6 +25,60 @@ class LLMLoopError(LLMError):
     """Degenerate repetition in pre-content reasoning — the watchdog
     aborted the stream (owner decision 2026-10-06). Raising out of the
     httpx.stream context closes the connection and cancels generation."""
+
+
+class LLMCancelled(LLMError):
+    """User-requested stop of a streaming completion (owner decision
+    2026-10-15): the StreamCancel flag fired or the connection was dropped
+    by the stopper thread. Never retried."""
+
+
+class StreamCancel:
+    """Cancellation handle for chat_stream: a flag plus one attached close
+    callback (the live httpx response).
+
+    The stopper thread calls set() — it both flags the stop and drops the
+    connection, so Ollama cancels generation at once even while the reader
+    is blocked in prefill, before the first streamed token. The reader
+    thread attaches/detaches the callback around the response lifetime; a
+    close racing in from set() is harmless (closing twice is a no-op).
+    """
+
+    def __init__(self):
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._close = None
+
+    def is_set(self):
+        return self._event.is_set()
+
+    def set(self):
+        self._event.set()
+        with self._lock:
+            close, self._close = self._close, None
+        if close is not None:
+            try:
+                close()
+            except Exception:
+                pass  # the flag still stops the reader between events
+
+    def attach(self, close):
+        """Register the close callback; fires immediately when already set."""
+        fire = None
+        with self._lock:
+            if self._event.is_set():
+                fire = close
+            else:
+                self._close = close
+        if fire is not None:
+            try:
+                fire()
+            except Exception:
+                pass
+
+    def detach(self):
+        with self._lock:
+            self._close = None
 
 
 def _headers(endpoint):
@@ -84,7 +139,7 @@ def chat(endpoint, messages, temperature=0.0, max_tokens=2048,
 
 
 def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
-                timeout=600, attempts=4, freq_penalty=None):
+                timeout=600, attempts=4, freq_penalty=None, cancel=None):
     """Streaming completion -> generator of typed events:
     {"type": "reasoning", "text": ...} (thinking models) and
     {"type": "content", "text": ...}.
@@ -97,6 +152,11 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
     the request with LLMLoopError (retrying mid-content would duplicate
     streamed text — only the reasoning phase is guarded). `freq_penalty`
     adds an anti-repetition nudge for the retry attempt (answerer only).
+
+    `cancel` (StreamCancel, owner decision 2026-10-15) aborts the request
+    with LLMCancelled: set() drops the connection (so a reader blocked in
+    prefill wakes at once — Ollama cancels generation), and the flag is
+    re-checked between events. A cancelled request is never retried.
     """
     kw = {"messages": messages, "temperature": temperature,
           "max_tokens": max_tokens, "stream": True}
@@ -112,6 +172,8 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
     last = None
     saw_content = False
     for i in range(attempts):
+        if cancel is not None and cancel.is_set():
+            raise LLMCancelled("cancelled by user")
         got_event = False
         try:
             with httpx.stream("POST", url, content=body.encode("utf-8"),
@@ -121,39 +183,57 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
                     last = LLMError(f"HTTP {r.status_code} from {url}")
                 else:
                     r.raise_for_status()
-                    for line in r.iter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            return
-                        try:
-                            delta = json.loads(data)["choices"][0]["delta"]
-                        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
-                            continue
-                        reasoning = delta.get("reasoning") or delta.get("reasoning_content")
-                        if reasoning:
-                            if guard is not None and not saw_content:
-                                reason = guard.feed(reasoning)
-                                if reason:
-                                    raise LLMLoopError(
-                                        f"degenerate reasoning loop: {reason}")
-                            got_event = True
-                            yield {"type": "reasoning", "text": reasoning}
-                        content = delta.get("content")
-                        if content:
-                            saw_content = True
-                            got_event = True
-                            yield {"type": "content", "text": content}
+                    if cancel is not None:
+                        cancel.attach(r.close)
+                    try:
+                        for line in r.iter_lines():
+                            if cancel is not None and cancel.is_set():
+                                raise LLMCancelled("cancelled by user")
+                            if not line or not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if data == "[DONE]":
+                                return
+                            try:
+                                delta = json.loads(data)["choices"][0]["delta"]
+                            except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                                continue
+                            reasoning = delta.get("reasoning") or delta.get("reasoning_content")
+                            if reasoning:
+                                if guard is not None and not saw_content:
+                                    reason = guard.feed(reasoning)
+                                    if reason:
+                                        raise LLMLoopError(
+                                            f"degenerate reasoning loop: {reason}")
+                                got_event = True
+                                yield {"type": "reasoning", "text": reasoning}
+                            content = delta.get("content")
+                            if content:
+                                saw_content = True
+                                got_event = True
+                                yield {"type": "content", "text": content}
+                    finally:
+                        if cancel is not None:
+                            cancel.detach()
                     return
         except LLMError as e:
+            if cancel is not None and cancel.is_set():
+                raise LLMCancelled("cancelled by user") from e
             if got_event or isinstance(e, LLMLoopError):
                 raise
             last = e
         except (httpx.HTTPError, OSError) as e:
+            if cancel is not None and cancel.is_set():
+                raise LLMCancelled("cancelled by user") from e
             if got_event:
                 raise LLMError(f"{type(e).__name__} mid-stream from {url}: {e}")
             last = LLMError(f"{type(e).__name__} from {url}: {e}")
+        except Exception as e:
+            # a cross-thread close can surface as an unexpected internal
+            # error in the reader — a set flag means it was the stop
+            if cancel is not None and cancel.is_set():
+                raise LLMCancelled("cancelled by user") from e
+            raise
         _sleep(i)
     raise last
 

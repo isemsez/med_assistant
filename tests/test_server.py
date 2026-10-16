@@ -10,6 +10,8 @@ import json
 import os
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -104,11 +106,28 @@ class FakePipe:
         self.appendix_events = appendix_events
         self.appendix_error = appendix_error
         self.calls = []
+        # "events" (default) | "endless" (streams forever; the server's stop
+        # flag breaks the loop) | "cancel_sim" (waits for the flag, then
+        # raises LLMCancelled — the instant-drop path)
+        self.answer_mode = "events"
+        self.answer_yields = 0  # events yielded by the endless stream so far
 
-    def stream_answer(self, question, history=None, card=None, drug=None):
+    def stream_answer(self, question, history=None, card=None, drug=None,
+                      cancel=None):
         self.calls.append(("stream", question, list(history or []), card, drug))
         if isinstance(self.answer_events, Exception):
             raise self.answer_events
+        if self.answer_mode == "endless":
+            while True:
+                self.answer_yields += 1
+                yield {"type": "reasoning", "text": "мысль "}
+                time.sleep(0.005)
+        if self.answer_mode == "cancel_sim":
+            self.answer_yields += 1
+            yield {"type": "reasoning", "text": "мысль"}
+            while cancel is None or not cancel.is_set():
+                time.sleep(0.005)
+            raise llm.LLMCancelled("cancelled by user")
         yield from self.answer_events
 
     def iter_appendix(self, question, raw_answer, session_id=None, manual=False):
@@ -303,6 +322,110 @@ class TestChat(Base):
             len(self.client.get(f"/api/sessions/{sid}/messages").json()), 1)
         self.assertEqual(self.client.delete(
             f"/api/sessions/{sid}/messages/{assistant_id}").status_code, 404)
+
+
+class TestStop(Base):
+    """User stop of the answerer (owner decision 2026-10-15): POST
+    /api/sessions/{id}/stop drops the Ollama connection, the stream ends
+    with a `stopped` event, and the half-finished turn's rows are deleted
+    (undo send). Answerer phase only — completed turns are untouchable."""
+
+    def _turns(self, sid):
+        with srv.app.state.turns_lock:
+            return list(srv.app.state.turns.get(sid, []))
+
+    def _chat_in_thread(self, sid, question="Вопрос про ХСН?"):
+        out = {}
+
+        def run():
+            out["r"] = self.client.post(
+                "/api/chat", json={"session_id": sid, "question": question})
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        return t, out
+
+    def _wait_registered(self, sid, timeout=5):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._turns(sid):
+                return
+            time.sleep(0.01)
+        self.fail("the in-flight turn never registered")
+
+    def _wait_answer_events(self, n, timeout=5):
+        # deterministic stop point: the turn must actually be streaming (the
+        # stop may legitimately land before the first event otherwise — the
+        # first two deltas die in the "thought\n" prefix drop)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.pipe.answer_yields >= n:
+                return
+            time.sleep(0.01)
+        self.fail("the answerer never streamed")
+
+    def _stop(self, sid, n=5):
+        t, out = self._chat_in_thread(sid)
+        self._wait_registered(sid)
+        self._wait_answer_events(n)
+        r = self.client.post(f"/api/sessions/{sid}/stop")
+        t.join(timeout=10)
+        self.assertFalse(t.is_alive(), "the stream must end after a stop")
+        return r, out
+
+    def test_stop_mid_answerer_undoes_the_turn(self):
+        sid = self.client.post("/api/sessions", json={"title": ""}).json()["id"]
+        self.pipe.answer_mode = "endless"
+        r, out = self._stop(sid)
+        self.assertEqual(r.json(), {"ok": True, "stopped": 1})
+        names = [e for e, _ in parse_sse(out["r"].text)]
+        self.assertIn("reasoning", names)
+        self.assertEqual(names[-1], "stopped")
+        self.assertNotIn("done", names, "an undone turn is never completed")
+        self.assertEqual(
+            self.client.get(f"/api/sessions/{sid}/messages").json(), [])
+        self.assertEqual(self._turns(sid), [], "registry cleaned up")
+
+    def test_stop_via_llm_cancelled_exception(self):
+        # the instant path: the dropped connection surfaces in the streaming
+        # thread as llm.LLMCancelled — same undo-send semantics
+        sid = self.client.post("/api/sessions", json={"title": ""}).json()["id"]
+        self.pipe.answer_mode = "cancel_sim"
+        r, out = self._stop(sid, n=1)  # one event, then the flag wait
+        self.assertEqual(r.json(), {"ok": True, "stopped": 1})
+        names = [e for e, _ in parse_sse(out["r"].text)]
+        self.assertEqual(names[-1], "stopped")
+        self.assertEqual(
+            self.client.get(f"/api/sessions/{sid}/messages").json(), [])
+
+    def test_stop_audited(self):
+        sid = self.client.post("/api/sessions", json={"title": ""}).json()["id"]
+        self.pipe.answer_mode = "endless"
+        r, _ = self._stop(sid)
+        self.assertEqual(r.json()["stopped"], 1)
+        recs = [json.loads(l) for l in (TMP / "audit.jsonl")
+                .read_text(encoding="utf-8").splitlines()]
+        stops = [r for r in recs if r["stage"] == "user_stop"
+                 and r.get("session_id") == sid]
+        self.assertEqual(len(stops), 1)
+
+    def test_stop_idle_session_is_noop(self):
+        sid = self.client.post("/api/sessions", json={"title": ""}).json()["id"]
+        self.assertEqual(self.client.post(f"/api/sessions/{sid}/stop").json(),
+                         {"ok": True, "stopped": 0})
+
+    def test_stop_after_done_keeps_turn(self):
+        # stop is answerer-phase only (owner decision 2026-10-15): a
+        # completed turn and its appendix are untouchable
+        sid, _ = self.chat()
+        self.assertEqual(self.client.post(f"/api/sessions/{sid}/stop").json(),
+                         {"ok": True, "stopped": 0})
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertEqual([m["role"] for m in msgs], ["user", "assistant"])
+
+    def test_stop_unknown_session_404(self):
+        self.assertEqual(
+            self.client.post("/api/sessions/999/stop").status_code, 404)
 
 
 class TestPdfTurn(Base):
@@ -517,7 +640,7 @@ class TestStatic(Base):
     def test_index_served(self):
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
-        self.assertIn("Мед.ассистент", r.text)
+        self.assertIn("Мед. ассистент", r.text)
 
     def test_js_css_served_no_cache(self):
         # stale-JS fix (owner decision 2026-10-13): open tabs must

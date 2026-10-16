@@ -304,6 +304,21 @@ with partial or faked results; the answer ships with the honest note.
    guideline versions (adult vs pediatric) may be auto-picked without the
    relevance check; the physician remains the final check — and since §7.1
    the runner-ups are one click away in the appendix.
+5. **The answerer can be stopped — undo send** (owner decision 2026-10-15).
+   While the answerer generates, the send button is a Stop control
+   («Стоп»; Esc works too). A stop drops the HTTP connection to Ollama —
+   generation is cancelled at once, even in the silent prefill window right
+   after the send, which is exactly when a wrong question is noticed — and
+   undoes the turn: the question row and the partial thinking/answer are
+   deleted, the question returns to the composer for editing (a live
+   analogue of the ↩ rewind). `POST /api/sessions/{id}/stop` cancels the
+   session's in-flight answerer turns (audit `user_stop`; SSE `stopped`);
+   the streaming thread alone deletes the rows, so the cleanup is safe even
+   when the tab closes right after the click. Stop is answerer-phase only:
+   once the answer text completes, the appendix machinery always runs to
+   completion, and pdf turns (whose answerer phase is empty) are not
+   stoppable. A cancelled generation is never retried (`llm.LLMCancelled`
+   bypasses the loop-retry and the transport retry).
 
 ## 7. Filtered-out candidates — selection is not destructive
 

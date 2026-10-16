@@ -117,6 +117,7 @@ def collect(path, days=7, now=None):
         "turns": stages.get("question", 0),
         "pdf_turns": stages.get("pdf_query", 0),
         "answers": stages.get("raw_answer", 0),
+        "user_stops": stages.get("user_stop", 0),
         "appendix_status": dict(status),
         "stage_stop": dict(stops),
         "invalid": {"extract": stages.get("labeler_extract_invalid", 0),

@@ -116,6 +116,7 @@ async function refreshStats() {
       card(s.turns, "вопросов") +
       card(s.pdf_turns, "ручных pdf-запросов") +
       card(s.answers, "ответов") +
+      card(s.user_stops, "остановок генерации") +
       card(s.picks.calls, "подборов рекомендаций") +
       card(pct(s.picks.auto, s.picks.calls), "автоподбор");
     const rows = [
