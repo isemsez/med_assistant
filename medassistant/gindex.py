@@ -9,11 +9,19 @@ Cards never contain URLs — the model picks ids, Python renders URLs.
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import numpy as np
 
 from . import llm
+
+# trailing parenthetical that is pure ICD-code annotation, e.g.
+# «Диабетическая полинейропатия (E10-E14+ с общим четвертым знаком .4)» ->
+# «Диабетическая полиневропатия». The code noise dragged the exact-match
+# variant's similarity for «диабетическая полинейропатия» from 0.78 down to
+# 0.61 and kept the right guideline out of the top-5 (2026-10-16).
+_ICD_PARENTH = re.compile(r"\s*\([^()]*[A-Z]\d{2}[^()]*\)\s*$")
 
 
 def docs_hash(docs):
@@ -26,11 +34,15 @@ def docs_hash(docs):
 
 
 def doc_texts(meta):
-    """Embeddable texts for one guideline: name + mkb_names variants."""
+    """Embeddable texts for one guideline: name + mkb_names variants.
+
+    МКБ variants are stripped of trailing ICD-code parentheticals (pure
+    annotation noise for the embedder) and deduped after stripping.
+    """
     name = (meta.get("name") or "").strip()
     texts = [name] if name else []
     for part in (meta.get("mkb_names") or "").split(";"):
-        p = part.strip()
+        p = _ICD_PARENTH.sub("", part.strip()).strip()
         if p and p not in texts:
             texts.append(p)
     return texts
@@ -84,7 +96,16 @@ class GuidelineIndex:
         return cls(matrix, meta["rows"])
 
     def search_vectors(self, query_vecs, top_k=5):
-        """Normalized query vectors -> top-K cards, best score per code_version."""
+        """Normalized query vectors -> top-K cards, best score per code_version.
+
+        Each card carries `matched` — the indexed text (name or МКБ variant)
+        that produced the score. The labeler needs it to judge WHY a candidate
+        surfaced: «Преждевременное половое развитие» reaching the top-5 via its
+        МКБ variant «Полигландулярная гиперфункция» is obviously droppable only
+        when the matched text is visible (2026-10-16, полинейропатия turn).
+        `matched` never reaches the UI — the select event projects
+        code_version/name only (pipeline.py).
+        """
         if not len(self.rows) or not query_vecs:
             return []
         q = np.asarray(query_vecs, dtype=np.float32)
@@ -101,7 +122,8 @@ class GuidelineIndex:
                 best[cv] = (s, r)
         ranked = sorted(best.values(), key=lambda t: (-t[0], t[1]["code_version"]))
         return [{"code_version": r["code_version"], "name": r["name"],
-                 "score": round(s, 4)} for s, r in ranked[:top_k]]
+                 "score": round(s, 4), "matched": r["text"]}
+                for s, r in ranked[:top_k]]
 
     def search(self, query_variants, embed_endpoint, top_k=5, batch=64):
         """Embed query variants (list[str]) -> top-K cards."""

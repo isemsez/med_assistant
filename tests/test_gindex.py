@@ -24,6 +24,30 @@ class TestDocTexts(unittest.TestCase):
             ["А", "Б", "В"])
         self.assertEqual(gindex.doc_texts({"name": "", "mkb_names": ""}), [])
 
+    def test_icd_parenthetical_stripped_from_variants(self):
+        # trailing ICD-code annotation noise must not reach the embedder
+        # (2026-10-16: it cost the exact-match variant ~0.16 of similarity)
+        self.assertEqual(
+            gindex.doc_texts({"name": "Х",
+                              "mkb_names": "Диабетическая полиневропатия "
+                                           "(E10-E14+ с общим четвертым знаком .4)"}),
+            ["Х", "Диабетическая полиневропатия"])
+        self.assertEqual(
+            gindex.doc_texts({"name": "Х", "mkb_names": "Невралгия (B02.2+)"}),
+            ["Х", "Невралгия"])
+
+    def test_plain_parenthetical_kept(self):
+        # only code annotations go; meaningful parentheticals stay untouched
+        self.assertEqual(
+            gindex.doc_texts({"name": "Полиартроз (генерализованный остеоартрит)",
+                              "mkb_names": "Полиартроз (генерализованный остеоартрит)"}),
+            ["Полиартроз (генерализованный остеоартрит)"])
+
+    def test_stripped_variant_dedup(self):
+        self.assertEqual(
+            gindex.doc_texts({"name": "Х", "mkb_names": "Бетта (E10-E14+); Бетта"}),
+            ["Х", "Бетта"])
+
 
 class TestSearchVectors(unittest.TestCase):
     def setUp(self):
@@ -43,6 +67,15 @@ class TestSearchVectors(unittest.TestCase):
         cards = self.idx.search_vectors([e(4, 1, 0)], top_k=5)
         self.assertEqual(cards[0]["code_version"], "1_1")
         self.assertGreater(cards[0]["score"], 0.99)
+
+    def test_card_carries_matched_text(self):
+        # `matched` shows the labeler WHICH indexed text pulled the candidate
+        # in (name or МКБ variant) — scores stay display-free (2026-10-16)
+        cards = self.idx.search_vectors([e(4, 0, 0.5, 0.5)], top_k=5)
+        top = next(c for c in cards if c["code_version"] == "1_1")
+        self.assertEqual(top["matched"], " Grip")
+        self.assertEqual(top["name"], "Грипп")
+        self.assertNotIn("url", top)
 
     def test_best_score_per_code_version(self):
         cards = self.idx.search_vectors([e(4, 1, 0)], top_k=5)

@@ -75,7 +75,13 @@ def _select_user(question, answer, disease, cards):
     lines.append(f"\nЗаболевание: «{disease}»\n"
                  "\nКандидаты (идентификатор — название клинической рекомендации):")
     for i, c in enumerate(cards, 1):
-        lines.append(f"{i}. {c['code_version']} — {c['name']}")
+        # `matched` (the indexed МКБ variant that pulled the candidate in,
+        # when different from its name) lets the labeler see through
+        # sound-alike noise — a «поли-» prefix match on an unrelated doc —
+        # instead of rubber-stamping every candidate (2026-10-16).
+        m = c.get("matched")
+        extra = f" (совпавший термин: «{m}»)" if m and m != c["name"] else ""
+        lines.append(f"{i}. {c['code_version']} — {c['name']}{extra}")
     lines.append("\nВыведи JSON: {\"picks\": [идентификаторы подходящих кандидатов]}.")
     return "\n".join(lines)
 
