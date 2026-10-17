@@ -103,8 +103,14 @@ final answer = raw answer + appendix block (local PDF links only)
   **Register-grounded МНН lookup** (owner decision 2026-10-12; matching v2
   2026-10-13): the question is scanned for register trade names
   (`data/drugs.sqlite`, built by `scripts/grls_to_sqlite.py` from a ГРЛС
-  export); each usable match gets a «справочно» P.S. appended to the user
-  message (`prompts.drug_block`, after the question, before the card block)
+   export); each usable match gets a «справочно» note in the user
+   message (`prompts.drug_block` — BEFORE the question, then the card
+   block; owner decision 2026-10-17, superseding the 2026-10-12
+   after-question position: the 4B's thinking paraphrases the question
+   into English on its first lines and phonetically re-identifies
+   «валидол» as valium there, so diazepam pharmacology leaked into the
+   answer under a correct МНН label; with the anchor in front of the
+   question the binding wins — 3/3 clean live runs vs 0/2 after)
   and a `.sources.drug` block under the question bubble in the UI
   (`drug_map` SSE event live; persisted on the user row as
   `messages.drug_map`, restored on reload). This coexists with the

@@ -444,7 +444,10 @@ class TestDrugContext(unittest.TestCase):
                 "en": "железа сульфат (ferrous sulfate) + аскорбиновая"
                       " кислота (ascorbic acid)"}]
 
-    def test_drug_ps_lands_between_question_and_card(self):
+    def test_drug_ps_lands_before_question_and_card(self):
+        # owner decision 2026-10-17: the register note precedes the question
+        # so the thinking's English paraphrase of «валидол» cannot outrun
+        # the МНН binding (валидол -> "valium" -> diazepam pharmacology)
         pipe = make_pipe()
         msgs = pipe._messages(Q, None, card=("Иванов ИИ", "текст карты"),
                               drug=self.MATCHES)
@@ -455,7 +458,7 @@ class TestDrugContext(unittest.TestCase):
               " (ascorbic acid))")
         self.assertEqual(
             content,
-            f"{Q}\n\n{ps}\n\nАмбулаторная карта пациента Иванов ИИ"
+            f"{ps}\n\n{Q}\n\nАмбулаторная карта пациента Иванов ИИ"
             " (приложена врачом; учитывай её при ответе):\n\n"
             "текст карты\n\n(конец карты)")
 
@@ -481,7 +484,8 @@ class TestDrugContext(unittest.TestCase):
     def test_drug_ps_without_card(self):
         pipe = make_pipe()
         content = pipe._messages(Q, None, drug=self.MATCHES)[-1]["content"]
-        self.assertTrue(content.startswith(f"{Q}\n\n(справочно"))
+        self.assertTrue(content.startswith("(справочно"))
+        self.assertTrue(content.endswith(f"{Q}"))
         self.assertIn(
             "МНН: железа сульфат (ferrous sulfate) + аскорбиновая кислота"
             " (ascorbic acid)", content)

@@ -11,12 +11,16 @@ SYSTEM_ANSWERER = """Ты — справочный медицинский асс
 Правила:
 1. Лекарственные средства называй только международными непатентованными
    наименованиями (МНН). Не используй торговые наименования.
-2. Не переводи русское название препарата «по созвучию» на английский
-   и не выдумывай иностранных или торговых названий: неверно «Валидол
-   (Valocet)», «валидол (Valium)». Если к вопросу приложена справка из
-   государственного реестра лекарственных средств, МНН препарата бери
-   только из неё. Название, которым врач назвал препарат, можно повторить,
-   сразу раскрыв его через это МНН и не дублируя МНН дважды.
+2. Названия препаратов не переводи «по созвучию»: переводя вопрос в
+   размышлениях, оставляй названия препаратов в оригинальном виде; рядом
+   с русским названием препарата не должно быть скобок с иностранным
+   именем. Справка из государственного реестра лекарственных средств,
+   если она приложена к вопросу, полностью определяет препарат — его
+   действующее вещество (МНН) и фармакологическую группу: отождествляй
+   препарат только с этим МНН и не приписывай ему свойства других
+   лекарственных средств. Называя препарат, повтори слово врача и сразу
+   раскрой его через это МНН, например: «Валидол (МНН: левоментола
+   раствор в ментилизовалерате)». Не дублируй МНН дважды.
 3. Не предлагай самостоятельно лекарственную терапию: не называй препараты,
    дозы, схемы и тактику лечения, если врач прямо не спросил о лечении.
    Если врач спросил о лечении — отвечай строго по вопросу, только МНН.
@@ -39,13 +43,17 @@ def card_block(display_name, text):
 
 
 def drug_block(matches):
-    """Register-grounded МНН note appended after the question (owner
-    decision 2026-10-12, architecture.md §3[1]): matched trade names with
-    their МНН from the ГРЛС register, one line per match. Reference
-    framing, data only — no instructions. Every line anchors the doctor's
-    own word from the question (`token`, or `via` for colloquial aliases):
-    without the anchor the 4B re-identifies the drug from its own prior
-    (валидол → "Valium" → диазепам, 2026-10-13). The register attribution
+    """Register-grounded МНН note prepended BEFORE the question in the
+    answerer's user message (owner decision 2026-10-17, superseding the
+    2026-10-12 after-question position; architecture.md §3[1]): matched trade
+    names with their МНН from the ГРЛС register, one line per match.
+    Reference framing, data only — no instructions. Every line anchors the
+    doctor's own word from the question (`token`, or `via` for colloquial
+    aliases): without the anchor the 4B re-identifies the drug from its own
+    prior (валидол → "Valium" → диазепам, 2026-10-13) — and the anchor must
+    arrive before the question too: the thinking paraphrases the question
+    into English on its first lines and swaps «валидол» for "valium" before
+    it ever reaches a trailing note (2026-10-17). The register attribution
     is deliberate (§2[5]: every automated addition is clearly separated
     and sourced) — it marks the data as register truth, not the model's
     guess. Composite/obscure МНН carry a curated English gloss (`en`,

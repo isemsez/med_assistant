@@ -110,11 +110,18 @@ class Pipeline:
         patient-card block to the user message (architecture.md §9), and
         `drug=[{trade, inn}, ...]` the register-grounded МНН note
         (architecture.md §3[1]). The system prompt, history and the stored
-        question are unaffected."""
-        content = question
+        question are unaffected.
+
+        The МНН note goes BEFORE the question (owner decision 2026-10-17,
+        superseding 2026-10-12's after-question position): the 4B's thinking
+        paraphrases the question into English on its very first lines and
+        phonetically re-identifies «валидол» as valium there — diazepam
+        pharmacology then leaks into the answer under a correct МНН label.
+        With the anchor already in front of the question the binding wins:
+        3/3 clean live runs vs 0/2 with the note after the question.
+        """
         drug_text = prompts.drug_block(drug)
-        if drug_text:
-            content = f"{question}\n\n{drug_text}"
+        content = f"{drug_text}\n\n{question}" if drug_text else question
         if card is not None:
             display_name, text = card
             content = f"{content}\n\n{prompts.card_block(display_name, text)}"
