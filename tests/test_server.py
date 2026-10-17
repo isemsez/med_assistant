@@ -643,9 +643,10 @@ class TestStatic(Base):
         self.assertIn("Мед. ассистент", r.text)
 
     def test_js_css_served_no_cache(self):
-        # stale-JS fix (owner decision 2026-10-13): open tabs must
-        # revalidate the bundle on the next reload
-        for path in ("/app.js", "/util.js", "/style.css"):
+        # stale-asset fix (owner decision 2026-10-13; .html added
+        # 2026-10-17 after a cached old index.html + fresh app.js wedged
+        # the composer — session 84): every reload must revalidate
+        for path in ("/", "/admin", "/app.js", "/util.js", "/style.css"):
             r = self.client.get(path)
             self.assertEqual(r.status_code, 200, path)
             self.assertEqual(r.headers.get("cache-control"), "no-cache", path)

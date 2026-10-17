@@ -406,12 +406,53 @@ function makeThinkingBlock(asst) {
   };
 }
 
+// Elapsed readout under the stop label (owner request 2026-10-17): ticks
+// from the send while the turn runs («Останавливаю…» included), then freezes
+// and lingers 5 s over «Отправить» fading out. Animation (not transition)
+// so a fresh start snaps back to full opacity with nothing to cancel.
+let elapsedT0 = 0;
+let elapsedInt = null;
+let elapsedHideT = null;
+
+function fmtElapsed(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  return m ? `${m} мин ${String(s % 60).padStart(2, "0")} с` : `${s} с`;
+}
+
+function startElapsed() {
+  freezeElapsed();
+  const t = $("#send .timer");
+  elapsedT0 = Date.now();
+  t.hidden = false;
+  t.classList.remove("fading");
+  t.textContent = "0 с";
+  elapsedInt = setInterval(() => {
+    t.textContent = fmtElapsed(Date.now() - elapsedT0);
+  }, 500);
+}
+
+// stop ticking; if the readout is on screen, fade it out over 5 s and hide
+function freezeElapsed() {
+  if (elapsedInt) { clearInterval(elapsedInt); elapsedInt = null; }
+  if (elapsedHideT) { clearTimeout(elapsedHideT); elapsedHideT = null; }
+  const t = $("#send .timer");
+  if (t.hidden || t.classList.contains("fading")) return;
+  if (elapsedT0) t.textContent = fmtElapsed(Date.now() - elapsedT0);
+  t.classList.add("fading");
+  elapsedHideT = setTimeout(() => {
+    t.hidden = true;
+    t.classList.remove("fading");
+  }, 5000);
+}
+
 function setSendMode(mode) { // "send" | "stop" | "stopping"
   const btn = $("#send");
   btn.classList.toggle("stop", mode !== "send");
   btn.disabled = mode === "stopping";
-  btn.textContent = mode === "send" ? "Отправить"
+  btn.querySelector(".label").textContent = mode === "send" ? "Отправить"
     : mode === "stop" ? "Стоп" : "Останавливаю…";
+  if (mode === "send") freezeElapsed();
 }
 
 async function stopTurn() {
@@ -437,6 +478,7 @@ async function send(question) {
   stopping = false;
   let gotStopped = false;
   setSendMode("stop");
+  startElapsed();
   // The whole live turn — question bubble, thinking, answer, status lines,
   // candidate cards, sources — lives in ONE wrapper. A session switch wipes
   // #messages and detaches the wrapper whole; coming back re-attaches it and
@@ -651,6 +693,25 @@ async function send(question) {
 }
 
 // ---------- boot ----------
+
+// A stale cached index.html must not wedge the composer (session 84,
+// 2026-10-17): the server's no-cache revalidation covered .js/.css but
+// not .html, so a reload paired fresh app.js with the old flat button —
+// setSendMode's .label lookup threw before send()'s try block and busy
+// stuck on (question eaten, no nodes, no fetch). Rebuild the structure
+// here so the spans always exist, whatever markup the browser cached.
+(function ensureSendParts() {
+  const btn = $("#send");
+  if (btn.querySelector(".label")) return;
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = btn.textContent.trim();
+  const timer = document.createElement("span");
+  timer.className = "timer";
+  timer.hidden = true;
+  btn.textContent = "";
+  btn.append(label, timer);
+})();
 
 $("#composer").addEventListener("submit", (e) => {
   e.preventDefault();

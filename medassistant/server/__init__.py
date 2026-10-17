@@ -26,11 +26,17 @@ app = FastAPI(title="med_assistant", docs_url=None, redoc_url=None)
 
 @app.middleware("http")
 async def _static_revalidate(request, call_next):
-    """Stale-JS fix (owner decision 2026-10-13): .js/.css responses carry
-    `Cache-Control: no-cache` so an open tab revalidates app.js/style.css
-    on the next reload instead of running yesterday's bundle."""
+    """Stale-asset fix (owner decision 2026-10-13; extended to .html
+    2026-10-17): .js/.css/.html responses carry `Cache-Control: no-cache`
+    so a reload revalidates every static file. Without the .html pin a
+    heuristically cached index.html shipped the old flat #send button
+    alongside fresh app.js, whose .label lookup crashed before send()'s
+    try block and wedged the composer (session 84, 2026-10-17)."""
     resp = await call_next(request)
-    if request.url.path.endswith((".js", ".css")):
+    # extensionless HTML entry paths: "/" serves index.html via the
+    # StaticFiles html=True mount, "/admin" a FileResponse
+    if (request.url.path.endswith((".js", ".css", ".html"))
+            or request.url.path in ("/", "/admin")):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
 

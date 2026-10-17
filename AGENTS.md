@@ -15,8 +15,9 @@ streams into a collapsible «Размышления модели» block (auto-c
 answer starts); the appendix machinery shows a live stage line («Поиск болезней
 в тексте…» → «Ищу соответствующие pdf.» → …) and the composer unblocks
 as soon as the answer text is done; while the answerer generates, the send
-button is a Stop control («Стоп», Esc too; owner decision 2026-10-15) —
-`POST /api/sessions/{id}/stop` drops the Ollama connection (generation
+button is a Stop control («Стоп», Esc too; owner decision 2026-10-15) — an
+elapsed-time line ticks under the label and lingers 5 s over «Отправить»
+fading out (owner request 2026-10-17) — `POST /api/sessions/{id}/stop` drops the Ollama connection (generation
 cancels instantly, even mid-prefill), deletes the half-finished turn and
 returns the question to the composer for editing (answerer phase only; the
 appendix always runs to completion); when the labeler filter runs, the candidate

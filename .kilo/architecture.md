@@ -335,7 +335,10 @@ with partial or faked results; the answer ships with the honest note.
    the runner-ups are one click away in the appendix.
 5. **The answerer can be stopped — undo send** (owner decision 2026-10-15).
    While the answerer generates, the send button is a Stop control
-   («Стоп»; Esc works too). A stop drops the HTTP connection to Ollama —
+   («Стоп»; Esc works too); under the label a small elapsed-time line ticks
+   from the send (seconds, minutes after the first minute) and lingers 5 s
+   over «Отправить» fading out (owner request 2026-10-17). A stop drops the
+   HTTP connection to Ollama —
    generation is cancelled at once, even in the silent prefill window right
    after the send, which is exactly when a wrong question is noticed — and
    undoes the turn: the question row and the partial thinking/answer are

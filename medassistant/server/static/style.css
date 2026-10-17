@@ -104,6 +104,17 @@ details.thinking .think-body {
 #send.stop { background: var(--panel); color: var(--muted);
   box-shadow: inset 0 0 0 1px #c9d3dc; }
 #send.stop:not(:disabled):hover { background: #eef2f6; color: var(--ink); }
+/* elapsed readout inside the send/stop button (owner request 2026-10-17):
+   a small second line under the label — ticks under «Стоп» while the turn
+   runs, then lingers 5 s under «Отправить» fading out. The button is a
+   centered flex column so the label never shifts when the line appears or
+   hides; tabular numerals stop the digits jittering each second */
+#send { display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 1px; }
+#send .timer { font-size: 11px; line-height: 1.2; opacity: 0.75;
+  font-variant-numeric: tabular-nums; }
+#send .timer.fading { animation: send-timer-fade 5s linear forwards; }
+@keyframes send-timer-fade { to { opacity: 0; } }
 
 /* patient-card toggle (owner decision 2026-10-07): ONE composer button —
    OFF «Карта пациента» opens the picker (pinned name highlighted); ON
