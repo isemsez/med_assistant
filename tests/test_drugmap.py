@@ -25,8 +25,7 @@ ROWS = [
     ("Валерианы экстракт", "Валерианы лекарственной корневищ с корнями экстракт"),
     ("Железо Комплекс", "Железа фумарат"),
     ("Кагоцел®", "~"),                              # placeholder МНН: not keyed
-    ("Истуриса®", "Осилодростат"),  # key «истурис»: Levenshtein-2 of «историю»
-    ("Пертуссин", "Тимьяна ползучего травы экстракт+Калия бромид"),
+    ("Истуриса®", "Осилодростат"),  # vowel-final key «истурис»
     # disease-stem brand names (2026-10-15 stoplist work): keys collide
     # with inflected disease words in the dict tier and/or at dist 1
     ("Артрозан", "Мелоксикам"),                     # key «артроза»
@@ -36,6 +35,23 @@ ROWS = [
     ("Диабетон МВ", "Гликлазид"),                   # key «диабето»
     ("ПОДАГРУМ", "Фебуксостат"),                    # key «подагру»
     ("Подагрель", "Фебуксостат"),                   # key «подагрел»
+    # 2026-10-16..17 incidents: ordinary question words prefix-matched
+    # short keys — «максимальной» -> «мак» (МАК-ПАС), «эффект» ->
+    # «эффек» (ЭФФЕКС), «анестетик» -> «анеста» (АНЕСТА-А);
+    # «антибиотик»/«азотемия» were latent. The 2026-10-17 endings
+    # whitelist kills the class; these rows pin it down.
+    ("МАК-ПАС®", "Аминосалициловая кислота"),       # key «мак»
+    ("ЭФФЕКС® Силденафил", "Силденафил"),           # key «эффек», ambiguous
+    ("ЭФФЕКС® Трибулус", "Якорцев стелющихся травы экстракт"),
+    ("Анти-Ангин Формула", "Тетракаин+Хлоргексидин+[Аскорбиновая кислота]"),  # key «анти»
+    ("Анеста-А", "Лидокаин+Прилокаин"),             # key word «анеста»
+    ("Азота закись", "Динитрогена оксид"),          # key «азота» (genitive)
+    ("Омез®", "Омепразол"),                         # key «омез» (4 chars)
+    ("Омез® ДСР", "Домперидон+Омепразол"),
+    ("Габапентин", "Габапентин"),
+    ("Дулоксетин", "Дулоксетин"),
+    ("Бета-каротин", "Бета-каротин"),               # key word «бета» (4)
+    ("Грудной эликсир", "Грудной эликсир"),         # adjectival й-stem
 ]
 
 ALIASES = {"валерьянка": "Валерианы настойка",  # value = register trade name
@@ -172,53 +188,41 @@ class TestAliases(unittest.TestCase):
         self.assertEqual(dmap().lookup("валерьянка — это лекарство?"), [])
 
 
-class TestTypoTier(unittest.TestCase):
-    def test_dist1_typo_matches_unambiguous_key(self):
-        m = dmap().lookup("дозировка азитромица")  # и→а, one edit
-        self.assertEqual(m, [{"trade": "Азитромицин", "inn": "азитромицин",
-                              "token": "азитромица"}])
+class TestNoTypoTier(unittest.TestCase):
+    """The Levenshtein typo tier was removed (owner decision 2026-10-17):
+    across the whole live history it caught zero real typos and produced
+    one documented false positive («перкуссии»→Пертуссин, 2026-10-15),
+    while dist-1 kept admitting common words («панкреатит»→Панкреатин).
+    A recurring doctor typo now gets a curated alias in
+    data/drug_aliases.yaml."""
 
-    def test_dist2_typo_no_longer_matches(self):
-        # «азитромицна» is Levenshtein-2 of the key «азитромици» — the
-        # tier was tightened to dist 1 (owner decision 2026-10-15)
+    def test_one_edit_typo_never_grounds(self):
+        self.assertEqual(dmap().lookup("дозировка азитромица"), [])
         self.assertEqual(dmap().lookup("дозировка азитромицна"), [])
 
-    def test_percussion_incident_regression(self):
-        # «перкуссии» is Levenshtein-2 of the key «пертусси» (Пертуссин) —
-        # the 2026-10-15 incident: the P.S. grounded Пертуссин in a
-        # cardiology question and the 4B wove its bromide into the answer
-        self.assertEqual(
-            dmap().lookup("как тона могут меняться при перкуссии"), [])
-
-    def test_short_token_never_fuzzy(self):
+    def test_mangled_short_form_never_grounds(self):
         self.assertEqual(dmap().lookup("нурофн дозировка"), [])
-
-    def test_ambiguous_key_never_fuzzy(self):
-        # «нурофкн» is within Levenshtein 2 of the ambiguous key «нурофе» —
-        # the typo tier only accepts unambiguous keys, so nothing matches
         self.assertEqual(dmap().lookup("нурофкн дозировка"), [])
 
-    def test_common_word_history_not_fuzzy(self):
-        # «историю» is Levenshtein-2 of the unambiguous key «истурис»
-        # (Истуриса — осилодростат): stoplisted, and dist 2 no longer
-        # matches anyway
+    def test_common_words_stay_silent(self):
+        # «перкуссии» (2026-10-15 incident) and «историю»: no tier left
+        # that could match them
+        self.assertEqual(
+            dmap().lookup("как тона могут меняться при перкуссии"), [])
         self.assertEqual(
             dmap().lookup("в кратце перескажи его историю"), [])
-
-    def test_real_drug_still_matches_despite_history_stopword(self):
-        m = dmap().lookup("дозировка истурисы")
-        self.assertEqual(m, [{"trade": "Истуриса", "inn": "осилодростат",
-                              "token": "истурисы"}])
 
 
 class TestStemStoplist(unittest.TestCase):
     """Disease-stem collisions (owner decision 2026-10-15): brand names
     built on disease stems collide with inflected disease words in the
-    dict tier and at dist 1. Exact stoplist tokens suppress the disease
+    dict tier. Exact stoplist tokens suppress the disease
     forms; drug inflections are distinct tokens and still ground."""
 
     def test_disease_forms_never_ground(self):
         for q in ("лечение артроза", "что делать при артрозе",
+                  "ревматоидного артрита", "что делать при артрите",
+                  "боли артритом",
                   "какие витамины при беременности",
                   "обострение бронхита", "жар при бронхите",
                   "диета при сахарном диабете", "проблемы с диабетом",
@@ -228,6 +232,7 @@ class TestStemStoplist(unittest.TestCase):
     def test_drug_forms_still_ground(self):
         cases = {
             "дозировка артрозана": "Артрозан",
+            "артра дозировка": "Артра",
             "витамин д3 норма": "Витамин D3",
             "бронхо мунал состав": "Бронхо-мунал",
             "лечение диабетоном": "Диабетон МВ",
@@ -237,6 +242,90 @@ class TestStemStoplist(unittest.TestCase):
         for q, trade in cases.items():
             m = dmap().lookup(q)
             self.assertEqual([x["trade"] for x in m], [trade], q)
+
+
+class TestEndingsGuard(unittest.TestCase):
+    """A token grounds a dict key only as a real inflected form of the
+    key's original first word: the exact word, word+ending, or a
+    vowel/ь/й-final word minus that letter + ending — endings from the
+    closed ENDINGS set (owner decision 2026-10-17, replacing the
+    2026-10-16 word+≤3 length cap that «анестетик» = «анеста»+3 slipped
+    through). Ordinary words with non-ending tails never ground; real
+    forms of real names always do."""
+
+    QUESTION_67 = ("Для этого пациента что предпочтительнее — габапентин "
+                   "или дулоксетин, и почему? С какой схемы титрования "
+                   "начать, до какой максимальной дозы идти и как долго "
+                   "оценивать эффект, прежде чем сменить препарат?")
+
+    def test_incident_question_67(self):
+        m = dmap().lookup(self.QUESTION_67)
+        self.assertEqual([x["trade"] for x in m],
+                         ["Габапентин", "Дулоксетин"])
+
+    def test_non_ending_tails_never_ground(self):
+        for q in ("до какой максимальной дозы идти",
+                  "как долго оценивать эффект",
+                  "оцените эффекта и эффективность",
+                  "антибиотик при ангине",
+                  "антикоагулянтов дозировка",
+                  "азотемия что это",
+                  # session 70 (2026-10-16): «анестетик» = «анеста»+3 —
+                  # «етик» is not an ending (also stoplisted)
+                  "если он местный анестетик, тогда где он применяется"):
+            self.assertEqual(dmap().lookup(q), [], q)
+
+    def test_digit_tail_never_grounds(self):
+        # the letters-only rule comes free: «2» is not an ending
+        self.assertEqual(dmap().lookup("агонисты бета2 при астме"), [])
+
+    def test_consonant_final_substitution_never_grounds(self):
+        # the «эффект» pattern: a same-length last-letter change on a
+        # consonant-final word is never an inflection
+        self.assertEqual(dmap().lookup("дозировка нурофем"), [])
+
+    def test_bare_stem_never_grounds(self):
+        # the key itself («нурофен» -> key «нурофе») is not a word form
+        self.assertEqual(dmap().lookup("дозировка нурофе"), [])
+
+    def test_non_ending_suffix_never_grounds(self):
+        # «овым» is adjective-shaped but not an ending
+        self.assertEqual(dmap().lookup("дозировка нурофеновым"), [])
+
+    def test_plural_instrumental_grounds(self):
+        m = dmap().lookup("лечение нурофенами")  # «нурофен» + «ами»
+        self.assertEqual([x["trade"] for x in m], ["Нурофен"])
+
+    def test_short_key_inflections_still_ground(self):
+        m = dmap().lookup("что в омезе")  # «омез» + «е»
+        self.assertEqual([x["trade"] for x in m], ["Омез"])
+
+    def test_adjectival_j_stem_grounds(self):
+        # «грудной» ends in й: «грудного» = «грудн» + «ого»
+        m = dmap().lookup("состав грудного эликсира")
+        self.assertEqual([x["trade"] for x in m], ["Грудной эликсир"])
+
+    def test_vowel_final_replacement_grounds(self):
+        # «истуриса» (vowel-final) -> «истурисы»: the ы replaces the vowel
+        m = dmap().lookup("дозировка истурисы")
+        self.assertEqual(m, [{"trade": "Истуриса", "inn": "осилодростат",
+                              "token": "истурисы"}])
+
+    def test_real_effex_name_still_grounds(self):
+        # «эффекс» is a distinct token — never stoplisted; the adjacent
+        # «силденафила» disambiguates the ЭФФЕКС group to Силденафил
+        m = dmap().lookup("дозировка эффекс силденафила")
+        self.assertEqual([x["trade"] for x in m], ["ЭФФЕКС Силденафил"])
+
+    def test_anesta_real_name_still_grounds(self):
+        # «анеста» is the drug's own word — distinct from «анестетик»
+        m = dmap().lookup("дозировка анеста-а")
+        self.assertEqual([x["trade"] for x in m], ["Анеста-А"])
+
+    def test_short_first_word_names_stay_ungroundable(self):
+        # МАК-ПАС tokens «мак»/«пас» are < TOKEN_MIN: the name was only
+        # ever reachable through false positives — unchanged behavior
+        self.assertEqual(dmap().lookup("про мак-пас"), [])
 
 
 class TestPairColumn(unittest.TestCase):

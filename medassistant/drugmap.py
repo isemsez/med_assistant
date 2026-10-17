@@ -15,7 +15,15 @@ letter stripped (never the first). Leading 1–2 letter segments followed by
 are dropped so the key lands on the next word; digit-led names are skipped
 entirely; keys <3 chars are skipped. Placeholder МНН (`~`) rows are not
 keyed. Lookup: question tokens ≥5 chars, minus a stoplist, match the
-LONGEST key they start with. A key with one distinct МНН resolves directly;
+LONGEST key they start with, provided the token is a real inflected
+form of the key's original first word — the word itself, word+ending,
+or (a vowel/ь/й-final word) the word minus that letter + ending, with
+endings from a closed set. The raw word+≤3 length cap (2026-10-16) let
+boundary words through («анестетик» = «анеста»+3 grounded АНЕСТА-А,
+«азотемия» = «азота»+3); the endings whitelist (owner decision
+2026-10-17) kills the whole class — non-ending tails are different
+words — while real forms survive («нурофенами», «омеза», «грудного»).
+A key with one distinct МНН resolves directly;
 an ambiguous key restricts on the adjacent bigram — the first-word token
 immediately followed by a token prefix-matching a later word of a name
 («нурофен плюс» — adjacency required, «плюс» alone is a common word) — and
@@ -23,11 +31,13 @@ otherwise falls back to the modal МНН (most register rows; tie → the МНН
 matching the names' first word; then stable). When nothing matched at all:
 the curated alias table `data/drug_aliases.yaml` (value = register trade
 name resolved through this dict, or a direct МНН for register holes — the
-file is owner-curated truth, never auto-extended), then a tight typo tier
-(Levenshtein ≤1 since 2026-10-15 — dist 2 matched «перкуссии»→«пертусси»
-and grounded Пертуссин in a cardiology answer; same first 3 chars, token
-≥7 chars, key must be unambiguous). A shared stoplist suppresses
-disease-stem collisions in both the dict and typo tiers (owner decision
+file is owner-curated truth, never auto-extended; a recurring doctor
+typo gets a curated alias the same way). The Levenshtein typo tier
+(2026-10-13..17) was removed 2026-10-17: across the whole live history
+it caught zero real typos and produced one documented false positive
+(«перкуссии»→Пертуссин at the old dist 2), while dist-1 kept admitting
+common words («панкреатит»→Панкреатин). A shared stoplist suppresses
+disease-stem collisions in both the dict and alias tiers (owner decision
 2026-10-15: brand names are built on disease stems — «артроза»→Артрозан,
 «витамины»→Витамин D3, «диабетом»→Диабетон МВ — so inflected disease
 words collide at any distance; disease and drug inflections are distinct
@@ -47,11 +57,28 @@ MAX_NAME_CHARS = 64
 MAX_TOKENS = 5                  # longer register names are descriptive noise
 KEY_MIN = 3                     # keys shorter than this never exist
 TOKEN_MIN = 5                   # question tokens shorter never match a key
-FUZZY_TOKEN_MIN = 7             # the typo tier needs a longer token
-FUZZY_MAX_DIST = 1              # Levenshtein; owner decision 2026-10-15:
-                                 # dist 2 matched «перкуссии»→«пертусси» and
-                                 # grounded Пертуссин in a cardiology answer
-FUZZY_HEAD = 3                  # token and key must share the first N chars
+# Closed set of Russian nominal/adjectival case endings (owner decision
+# 2026-10-17, replacing the raw word+≤3 length cap of 2026-10-16 that
+# boundary words slipped through: «анестетик» = «анеста»+3, «азотемия» =
+# «азота»+3). A token grounds a key only as слово+окончание or — for
+# words ending in a vowel, ь or й — слово-minus-that-letter+окончание;
+# any other tail («етик», «емия», «тый», digits like «бета2») is a
+# different word, not an inflection. Real forms survive: «нурофенами»,
+# «омеза», «истурисы», «грудного» (adjectival й-stem).
+ENDINGS = frozenset({
+    "а", "я", "у", "ю", "е", "и", "ы",           # sg gen/dat/acc/prep
+    "ой", "ою", "ей", "ею", "ов", "ев", "ью",    # instr sg, gen pl
+    "ом", "ем", "ам", "ям", "ах", "ях",          # instr sg, dat/prep pl
+    "ок", "ек",                                  # fleeting-vowel gen pl
+    "ым", "им", "ого", "его", "ому", "ему",      # adjective sg
+    "ая", "яя", "ое", "ее", "ые", "ие", "ых", "их", "ую", "юю",  # adj
+    "ами", "ями", "ыми", "ими",                  # instrumental pl
+})
+# word finals whose replacement is declension: vowels + ь + adjectival й
+STEM_FINALS = "аяоиеыуюьй"
+# adjective nominative finals — fully replaced by case endings
+# («грудной» -> «грудн»+«ого», «седативный» -> «седативн»+«ого»)
+ADJ_FINALS = ("ый", "ой", "ий")
 PLACEHOLDER_INNS = {"", "~", "-", "—", "?"}
 TRADE_MARKS = "®™"              # stripped from display names
 DEFAULT_CAP = 5
@@ -62,16 +89,18 @@ DEFAULT_CAP = 5
 # prefixes: disease and drug inflections are distinct tokens («диабетом»
 # болезнь vs «диабетоном» лекарство, «витамины» vs «витамин» в «витамин
 # д3»), so a disease-form entry leaves the drug form intact — but a
-# «бронхит*» prefix would block the real drug Бронхитол. «истори*» forms
-# fired the typo tier on «перескажи его историю» at the old dist 2; inert
-# at dist 1, kept as belt-and-braces. The disease-stem families below
-# (owner decision 2026-10-15) collided live in the dict tier and/or at
-# dist 1: brand names are built on disease stems (Артрозан←артроз,
+# «бронхит*» prefix would block the real drug Бронхитол. The
+# disease-stem families below (owner decision 2026-10-15) collided live
+# in the dict tier: brand names are built on disease stems (Артрозан←артроз,
 # Диабетон←диабет, Витамин D3←витамин, Бронхо-мунал←бронх-,
 # ПОДАГРУМ←подагра).
 STOP_WORDS = {
     "таблетки", "таблеток", "препарата", "препараты", "железо",
-    "история", "истории", "историю", "историй",
+    # артрит*: «ревматоидного артрита» grounded Артра (key «артр») within
+    # the inflation cap — the артрит family joins артроз below (2026-10-16);
+    # the drug token «артра» stays
+    "артрит", "артрита", "артрите", "артриту", "артритом",
+    "артритов", "артритам", "артритах", "артритами",
     # артроз*: «лечение артроза» grounded Артрозан/Артра
     "артроз", "артроза", "артрозе", "артрозу", "артрозом",
     "артрозов", "артрозам", "артрозах",
@@ -86,6 +115,26 @@ STOP_WORDS = {
     "диабета", "диабете", "диабету", "диабетом",
     # подагр*: «подагра» grounded ПОДАГРУМ / Подагрель
     "подагра", "подагре", "подагры", "подагру",
+    # эффект*: «как долго оценивать эффект» grounded ЭФФЕКС Силденафил
+    # in a neuropathic-pain question (2026-10-16). The endings rule now
+    # kills «эффект» structurally — «эффекс» ends in a consonant, so the
+    # same-length substitution «эффек»+«т» is never an inflection — the
+    # entries stay as belt-and-braces; the real token «эффекс» stays
+    "эффект", "эффекта", "эффекту", "эффектом", "эффекте",
+    "эффекты", "эффектов", "эффектам", "эффектами", "эффектах",
+    # азотеми*: «азота закись» is keyed by its own genitive «азота», and
+    # «азотемия» = «азот»+«емия» was a live false positive (2026-10-16);
+    # «емия» is not an ending, so the endings rule kills the family —
+    # belt-and-braces
+    "азотемия", "азотемии", "азотемию", "азотемий",
+    "азотемией", "азотемиях", "азотемиям",
+    # анестетик: «если он местный анестетик» grounded АНЕСТА-А (key word
+    # «анеста», 2026-10-16, session 70); «етик» is not an ending, so the
+    # endings rule kills it — belt-and-braces; «анеста» stays
+    "анестетик",
+    # Known accepted residual (2026-10-16): «азота» (5) still grounds
+    # Азота закись («уровень азота мочевины в крови») — the drug's own
+    # genitive IS «азота», an exact word the endings rule must admit.
 }
 
 
@@ -112,23 +161,6 @@ def _display_name(trade):
     whitespace collapsed («Нурофен® Плюс» -> «Нурофен Плюс»)."""
     s = trade.replace("®", "").replace("™", "")
     return re.sub(r"\s{2,}", " ", s).strip() or trade
-
-
-def _levenshtein(a, b, cap):
-    """DP distance, early-exit once every entry of a row exceeds `cap`."""
-    if abs(len(a) - len(b)) > cap:
-        return cap + 1
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        cur = [i]
-        for j, cb in enumerate(b, 1):
-            cur.append(min(prev[j] + 1,            # deletion
-                           cur[j - 1] + 1,         # insertion
-                           prev[j - 1] + (ca != cb)))  # substitution
-        if min(cur) > cap:
-            return cap + 1
-        prev = cur
-    return prev[-1]
 
 
 class DrugMap:
@@ -165,6 +197,11 @@ class DrugMap:
                 (_display_name(trade), inn, words))
         self._groups = {k: (m, Counter(inn for _, inn, _ in m))
                         for k, m in groups.items()}
+        # original first words per key: the endings whitelist checks the
+        # token against them (keys of ≥5-letter words lost their last
+        # letter, and one key may mix words of different lengths)
+        self._key_words = {k: {m[2][0] for m in ms}
+                           for k, ms in groups.items()}
         # alias: stemmed match key -> (normalized alias for display, value)
         self._aliases = {}
         for alias, value in (aliases or {}).items():
@@ -215,11 +252,38 @@ class DrugMap:
         inn = next(iter(inns)) if len(inns) == 1 else self._modal(pool)
         return {"trade": self._display(pool, inn), "inn": inn}
 
+    @staticmethod
+    def _inflection_ok(token, words):
+        """True when the token is a real inflected form of one of the
+        words: the exact word, word+ending, or the word minus its final
+        vowel/ь/й (or minus an adjective ый/ой/ий pair) + ending. Only
+        the closed ENDINGS set qualifies: tails like «анеста»+«етик» or
+        «эффек»+«т» (consonant-final substitution) are different words,
+        not inflections (owner decision 2026-10-17)."""
+        for w in words:
+            if token == w:
+                return True
+            if token.startswith(w) and token[len(w):] in ENDINGS:
+                return True
+            stems = [w[:-1]] if w[-1] in STEM_FINALS else []
+            if w[-2:] in ADJ_FINALS:
+                stems.append(w[:-2])
+            for stem in stems:
+                if token.startswith(stem) and token[len(stem):] in ENDINGS:
+                    return True
+        return False
+
     def _match_key(self, token):
-        """The LONGEST dict key that is a prefix of the token, or None."""
+        """The LONGEST dict key that is a prefix of the token and whose
+        token is a real inflected form of the key's original first word
+        (see _inflection_ok), or None. The endings whitelist replaces the
+        2026-10-16 length cap: «максимальной», «анестетик», «азотемия»,
+        «бета2» are not forms of any keyed word."""
         for n in range(len(token), KEY_MIN - 1, -1):
-            if token[:n] in self._groups:
-                return token[:n]
+            key = token[:n]
+            if key in self._groups and self._inflection_ok(
+                    token, self._key_words[key]):
+                return key
         return None
 
     # -- lookup tiers -------------------------------------------------------
@@ -277,6 +341,9 @@ class DrugMap:
             if hit is None:
                 continue
             alias, value = self._aliases[hit]
+            # the same inflection whitelist as the dict tier
+            if not self._inflection_ok(tok, {alias}):
+                continue
             # the value names a register trade name -> resolve through the
             # dict (carrying the doctor's word so the P.S. can connect it);
             # otherwise it is a direct МНН (register hole: row carries `~`
@@ -298,30 +365,6 @@ class DrugMap:
                 break
         return out
 
-    def _fuzzy_matches(self, text, cap):
-        raw = WORD_RE.findall(_norm(text))
-        out, seen = [], set()
-        for tok in raw:
-            if len(tok) < FUZZY_TOKEN_MIN or tok in STOP_WORDS:
-                continue
-            best = None  # (dist, key)
-            for key, (members, counter) in self._groups.items():
-                if len(counter) != 1 or not key.startswith(tok[:FUZZY_HEAD]):
-                    continue
-                d = _levenshtein(tok, key, FUZZY_MAX_DIST)
-                if d <= FUZZY_MAX_DIST and (best is None or (d, key) < best):
-                    best = (d, key)
-            if best is not None:
-                m = self._resolve(best[1], None)
-                m["token"] = tok  # the doctor's (typo'd) word
-                sig = (_norm(m["trade"]), m["inn"])
-                if sig not in seen:
-                    seen.add(sig)
-                    out.append(m)
-                    if len(out) >= cap:
-                        break
-        return out
-
     def _glossed(self, inn):
         """Pre-rendered bilingual МНН from the register's inn_pair column
         (scripts/inn_to_en.py builds it: Russian components with English
@@ -334,15 +377,14 @@ class DrugMap:
         question, by first occurrence; `token`/`via` anchor the doctor's
         word, `en` carries the rendered per-component English gloss when
         any component translates. Dict matching first; only when nothing
-        matched, the curated aliases, then the tight typo tier."""
+        matched, the curated aliases (the typo tier was removed
+        2026-10-17 — see the module docstring)."""
         q = _norm(question)
         if not q:
             return []
         out = self._dict_matches(q, cap)
         if not out:
             out = self._alias_matches(q, cap)
-        if not out:
-            out = self._fuzzy_matches(q, cap)
         for m in out:
             en = self._glossed(m["inn"])
             if en:

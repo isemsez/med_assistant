@@ -77,7 +77,7 @@ CARD_MAX_CHARS = int(os.environ.get("CARD_MAX_CHARS", "8000"))
 # decision 2026-10-13): first-word dictionary keys, adjacent-bigram
 # restriction, modal МНН, then curated aliases (data/drug_aliases.yaml —
 # owner-curated truth, value = register trade name or a direct МНН for
-# register holes) and a tight typo tier, only when nothing matched. A
+# register holes), only when nothing matched. A
 # missing DB silently disables the feature; DRUG_PS_MAX caps matches.
 DRUG_PS_MAX = int(os.environ.get("DRUG_PS_MAX", "5"))
 

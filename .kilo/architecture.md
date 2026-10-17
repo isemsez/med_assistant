@@ -119,23 +119,43 @@ final answer = raw answer + appendix block (local PDF links only)
   (owner's dictionary scheme, replaces the v1 stem+endings scan):
   names keyed by first word (last letter stripped, ≥3 chars; leading
   stereo segments «L-», «Д-», «D,L-» dropped, digit-led names skipped;
-  placeholder-МНН `~` rows not keyed); question tokens ≥5 chars (minus a
-  stoplist) match the longest key they start with; an ambiguous key is
-  restricted by the adjacent bigram («нурофен плюс» → ибупрофен+кодеин)
-  or falls back to the modal МНН (most rows, tie → the МНН matching the
-  names' first word; «нурофен» → ибупрофен). When nothing matched:
-  curated aliases (`data/drug_aliases.yaml` — owner-curated truth, value =
-  register trade name or a direct МНН for register holes like кагоцел →
-  меглюмина акридонацетат), then a tight typo tier (Levenshtein ≤1 since
-  2026-10-15 — dist 2 matched «перкуссии»→«пертусси» and grounded
-  Пертуссин in a cardiology answer; same first 3 chars, token ≥7 chars,
-  unambiguous keys only). A shared stoplist suppresses disease-stem
-  collisions in both the dict and typo tiers (owner decision 2026-10-15:
-  brand names are built on disease stems — «артроза»→Артрозан,
-  «витамины»→Витамин D3, «бронхите»→Бронхо-мунал, «диабетом»→Диабетон
-  МВ, «подагра»→ПОДАГРУМ all fired live; exact tokens only, never
-  prefixes — disease and drug inflections are distinct tokens, a
-  «бронхит*» prefix would block the real drug Бронхитол). Matches are
+   placeholder-МНН `~` rows not keyed); question tokens ≥5 chars (minus a
+   stoplist) match the longest key they start with, provided the token is
+   a real inflected form of the key's original first word — the word
+   itself, word+ending, or a vowel/ь/й-final word (or an adjective
+   ый/ой/ий stem) minus that tail + ending, endings from a closed set in
+   `drugmap.py` (owner decision 2026-10-17, tightening the word+≤3 length
+   cap of 2026-10-16: unbounded prefixes had grounded МАК-ПАС via
+   «максимальной» and ЭФФЕКС Силденафил via «эффект» in one
+   neuropathic-pain question, then «анестетик» = «анеста»+3 and
+   «азотемия» = «азота»+3 slipped through exactly at the cap boundary —
+   non-ending tails are different words, while real forms «нурофенами»,
+   «омеза», «грудного» survive); an ambiguous key is
+   restricted by the adjacent bigram («нурофен плюс» → ибупрофен+кодеин)
+   or falls back to the modal МНН (most rows, tie → the МНН matching the
+   names' first word; «нурофен» → ибупрофен). When nothing matched:
+   curated aliases (`data/drug_aliases.yaml` — owner-curated truth, value =
+   register trade name or a direct МНН for register holes like кагоцел →
+   меглюмина акридонацетат; a recurring doctor typo gets a curated alias
+   the same way). The Levenshtein typo tier (2026-10-13..17) was removed
+   (owner decision 2026-10-17): across the whole live history it caught
+   zero real typos and produced one documented false positive
+   («перкуссии»→Пертуссин, 2026-10-15), while dist-1 kept admitting
+   common words («панкреатит»→Панкреатин, «артерии»→Артерис-веро,
+   «тиреоидит»→Тиреоидин). A shared stoplist suppresses disease-stem
+   collisions in the dict and alias tiers (owner decision 2026-10-15:
+   brand names are built on disease stems — «артроза»→Артрозан,
+   «витамины»→Витамин D3, «бронхите»→Бронхо-мунал, «диабетом»→Диабетон
+   МВ, «подагра»→ПОДАГРУМ all fired live; exact tokens only, never
+   prefixes — disease and drug inflections are distinct tokens, a
+   «бронхит*» prefix would block the real drug Бронхитол; the
+   эффект*/артрит*/азотеми* families and the token «анестетик» joined it
+   2026-10-16 — all later killed structurally by the 2026-10-17 endings
+   rule, the entries stay as belt-and-braces; «азота» itself remains an
+   accepted residual: it IS the keyed word of Азота закись). The remaining
+   post-rule residue for owner curation is morphological homonyms in the
+   dict tier («кроме», «проток», «статин», «фактор*», «жидкость*»,
+   «колика»…). Matches are
   deduped and capped (`DRUG_PS_MAX`). Every P.S. line anchors the
   doctor's own word to the register row (`token`/`via`) — without the
   anchor the 4B re-identifies the drug from its own prior (валидол →
