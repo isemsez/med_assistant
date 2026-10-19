@@ -71,9 +71,11 @@ MANAGED_PORTS = {port for _, port in SERVERS} | {WEB_PORT}
 BOOT_KEEP = 5
 
 # discrete-only patterns (review 2026-10-18): bare "Arc" matches Intel Core
-# Ultra *integrated* "Arc Graphics" — require the A#/B# product letter
+# Ultra *integrated* "Arc Graphics" — require the A#/B# product letter; allow
+# "(TM)"/other separators between "Arc" and the letter+digit
+# ("Intel(R) Arc(TM) A770 Graphics" is discrete; "Arc Graphics" is iGPU).
 _GPU_RE = re.compile(
-    r"nvidia|geforce|\brtx\b|quadro|radeon\s+rx|radeon\s+pro|\barc\s+[ab]\d",
+    r"nvidia|geforce|\brtx\b|quadro|radeon\s+rx|radeon\s+pro|arc.*?[ab]\d",
     re.IGNORECASE)
 
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -233,7 +235,7 @@ def _kill(pid, tree=True):
 def sweep_orphans():
     """Kill llama-server.exe processes listening on NO managed port —
     garbage from earlier stops or crashes. llama-server has no child
-    runners, so a plain kill is enough (no tree walk, unlike Ollama)."""
+    runners, so a plain kill is enough (no tree walk)."""
     _, by_port = _listeners()
     healthy = {pid for port in MANAGED_PORTS for pid in by_port.get(port, ())}
     try:
@@ -359,7 +361,7 @@ def prune_boot_logs(prefix, keep=BOOT_KEEP):
 def server_cmd(role, port, backend):
     """llama-server invocation for one role (ports/ctx per architecture.md)."""
     ngl = ["-ngl", "0"] if backend == "cpu" else []
-    # --repeat-penalty 1.1 matches Ollama's sampler default: at temp 0 the
+    # --repeat-penalty 1.1 matches the default sampler: at temp 0 the
     # penalties run before greedy and keep a grammar-constrained labeler out
     # of degenerate id repetition (the 2026-10-18 select loop) and the
     # answerer closer to production behavior
@@ -367,14 +369,14 @@ def server_cmd(role, port, backend):
     if role == "answerer":
         # num_ctx 12288: patient card (~2750 tok) + history + the 2048-token
         # thinking/answer budget overflowed the 4096 default (owner decision
-        # 2026-10-09, carried over from the Ollama modelfile)
+        # 2026-10-09, carried over from the previous modelfile)
         return [str(ENGINE), "-m", str(GGUF), "--host", "127.0.0.1",
                 "--port", str(port), "--alias", "medgemma-answerer",
                 "-c", "12288", "--chat-template-file", str(ANSWERER_TEMPLATE),
                 "--reasoning-format", "deepseek", "--temp", "0", *sam, *ngl]
     if role == "labeler":
         # same GGUF, think-suppressing template; 8192 ctx headroom over the
-        # Ollama 4096 default (llama-server 400s on overflow instead of
+        # 4096 default (llama-server 400s on overflow instead of
         # silently truncating the prompt head)
         return [str(ENGINE), "-m", str(GGUF), "--host", "127.0.0.1",
                 "--port", str(port), "--alias", "medgemma-labeler",

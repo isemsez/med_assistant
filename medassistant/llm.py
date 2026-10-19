@@ -99,7 +99,7 @@ class StreamCancel:
     callback (the live httpx response).
 
     The stopper thread calls set() — it both flags the stop and drops the
-    connection, so Ollama cancels generation at once even while the reader
+    connection,     so llama-server cancels generation at once even while the reader
     is blocked in prefill, before the first streamed token. The reader
     thread attaches/detaches the callback around the response lifetime; a
     close racing in from set() is harmless (closing twice is a no-op).
@@ -233,7 +233,7 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
 
     `cancel` (StreamCancel, owner decision 2026-10-15) aborts the request
     with LLMCancelled: set() drops the connection (so a reader blocked in
-    prefill wakes at once — Ollama cancels generation), and the flag is
+    prefill wakes at once — llama-server cancels generation), and the flag is
     re-checked between events. A cancelled request is never retried.
     """
     kw = {"messages": messages, "temperature": temperature,

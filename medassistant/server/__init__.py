@@ -191,7 +191,7 @@ def pin_session_card(session_id: int, req: CardPinRequest):
 @app.post("/api/sessions/{session_id}/stop")
 def stop_turn(session_id: int):
     """Stop the session's in-flight answerer turn(s) — undo the send (owner
-    decision 2026-10-15): set() drops the Ollama connection, so generation
+    decision 2026-10-15): set() drops the llama-server connection, so generation
     cancels at once even mid-prefill, and the stream thread deletes the
     turn's rows and emits `stopped`. Turn-phase turns are skipped: once the
     answer text completes, the appendix machinery runs to completion."""
@@ -327,7 +327,7 @@ def chat(req: ChatRequest):
 
         # user stop (owner decision 2026-10-15): the turn registers until the
         # answerer stream completes; POST /api/sessions/{sid}/stop drops the
-        # Ollama connection (instant even mid-prefill). This thread alone
+        # llama-server connection (instant even mid-prefill). This thread alone
         # deletes the turn's rows — the stop request only sets the flag.
         turn = Turn(mid_user)
         _register_turn(app, sid, turn)
@@ -335,8 +335,8 @@ def chat(req: ChatRequest):
         try:
             parts, reasoning_parts, failed = [], [], False
             t_answer = time.monotonic()
-            # Stray-prefix filter: Ollama-era medgemma reasoning always began
-            # with a literal "thought\n"; llama-server pre-opens <think> and
+            # Stray-prefix filter: medgemma reasoning under the previous
+            # backend began with a literal "thought\n"; llama-server pre-opens <think> and
             # the artifact disappears (2026-10-18 backend port). The prefix is
             # matched across deltas and dropped only when it is actually
             # present — a clean backend loses nothing.
@@ -391,7 +391,7 @@ def chat(req: ChatRequest):
                 yield _sse("error", {"text": "Сбой генерации ответа."})
             finally:
                 # a cooperative stop breaks mid-stream: closing the generator
-                # drops the Ollama connection (no-op on normal completion)
+                # drops the llama-server connection (no-op on normal completion)
                 it.close()
             if stopped or turn.cancel.is_set():
                 # undo the send: nothing is stored; the finally below deletes
@@ -426,7 +426,7 @@ def chat(req: ChatRequest):
             if not turn.done and (stopped or turn.cancel.is_set()):
                 # the stopped turn's rows go now — even when the client already
                 # disconnected (finally still runs on GeneratorExit, and the
-                # dropped Ollama connection guarantees this thread woke up)
+                # dropped llama-server connection guarantees this thread woke up)
                 try:
                     store.truncate_from(sid, mid_user)
                 except Exception as e:

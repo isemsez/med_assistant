@@ -10,7 +10,7 @@ let loadPromise = Promise.resolve();
 let activeStream = null;
 // Stop control (owner decision 2026-10-15): while the answerer generates,
 // #send morphs into «Стоп» (Esc works too); a click POSTs
-// /api/sessions/{id}/stop — the server drops the Ollama connection, deletes
+// /api/sessions/{id}/stop — the server drops the llama-server connection, deletes
 // the turn's rows and ends the stream with a `stopped` event, which puts
 // the question back into the composer for editing. Answerer phase only.
 let stopping = false; // stop clicked for the in-flight turn (one shot)

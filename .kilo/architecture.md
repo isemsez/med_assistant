@@ -21,7 +21,7 @@ the caveat that a small generalist model serves their fields shallower.
 
 | Tier | Model | Where |
 |---|---|---|
-| Baseline (today) | `medgemma1.5:4b` Q4_K_M | local Ollama on this laptop |
+| Baseline (today) | `medgemma1.5-4b-q4km-text-only` Q4_K_M | local llama-server (llama.cpp Vulkan build, pinned in `deploy/llamacpp-pin.txt`) |
 | Target (future) | corporate `medgemma:27b-text` | internet API, corporate-hosted |
 
 All endpoints are OpenAI-compatible; switching tiers is a `.env` change. The
@@ -282,9 +282,14 @@ or pipeline steps.
 - **Backend:** the orchestrator as a long-running service: session and
   history management, answerer call, then the appendix machinery
   (labeler 1 → tool → labeler 2 → renderer) per answer.
-- **Background model services:** answerer (main Ollama instance, CPU),
-  labeler (second instance, iGPU), embed endpoint — always-on services,
-  nothing started per question.
+- **Background model services:** answerer (llama-server :8081, `num_ctx 12288`,
+  thinking ON), labeler (llama-server :8082, same GGUF with the think-suppressing
+  `labeler.jinja`), embed endpoint (llama-server :8083, bge-m3 F16,
+  `--embeddings --pooling cls`) — always-on services started by
+  `python -m medassistant.launcher` (or `Start.bat` on the target machine),
+  nothing started per question. GPU policy: dGPU-only with system-default layer
+  offload; iGPU-only or no GPU → `-ngl 0` pure CPU (`--force-cpu`/`--force-gpu`
+  overrides).
 - **Multi-turn:** each question carries the conversation history to the
   answerer (doctors ask follow-ups). The appendix is computed per reply
   from its **question + answer** — the question carries the disease name

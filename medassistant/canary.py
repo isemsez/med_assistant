@@ -133,7 +133,7 @@ def main(e2e=True, max_tokens=3072):
     ok = health_phase()
     if not ok:
         print("\nCANARY FAIL — fix the failing checks above "
-              "(see logs/ollama-*.log for model server errors).")
+              "(see logs/llama-*.log for model server errors).")
         return False
     if e2e:
         try:

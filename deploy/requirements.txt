@@ -1,0 +1,32 @@
+# med_assistant portable runtime — freeze-pinned (deploy/bootstrap_runtime.ps1
+# installs these into the embeddable CPython; deploy/build_deploy_zip.ps1 bakes
+# python\ into the zip). Runtime-only: dev packages (pytest, pluggy, ...) are
+# excluded by the zip build's exclusion list and never installed here.
+#
+# Regenerate from the validated dev venv:
+#   .venv\Scripts\python -m pip freeze > deploy/requirements.txt
+# then remove dev packages by hand (this file must stay runtime-only).
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+charset-normalizer==3.5.2
+click==8.5.0
+fastapi==0.141.1
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.8.0
+httpx==0.28.1
+idna==3.20
+numpy==2.5.3
+pydantic==2.13.5
+pydantic_core==2.46.5
+python-dotenv==1.2.3
+PyYAML==6.0.3
+requests==2.34.2
+starlette==1.7.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.8.0
+uvicorn==0.54.0
+websockets==17.1

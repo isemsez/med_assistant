@@ -91,13 +91,13 @@ LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "128
 # leading-space piece during prompt prefill). Two working transports:
 #   none            - no response_format: the labeler thinks (reasoning is
 #                     split server-side), parse_json_object tolerates fences
-#                     and prose — production parity with the Ollama stack
+#                     and prose — production parity
 #                     (the shipped default)
 #   grammar         - GBNF via schema_to_grammar in the request-level
 #                     "grammar" field: guaranteed-valid JSON but no thinking
 #                     (the grammar forces the first token), which measurably
 #                     weakens candidate selection (canary 2026-10-18)
-#   response_format - OpenAI json_schema (Ollama and other servers)
+#   response_format - OpenAI json_schema (llama.cpp and other servers)
 STRUCTURED_OUTPUT = os.environ.get("STRUCTURED_OUTPUT", "response_format")
 if STRUCTURED_OUTPUT not in {"none", "grammar", "response_format"}:
     raise SystemExit(f"STRUCTURED_OUTPUT must be none|grammar|response_format, "

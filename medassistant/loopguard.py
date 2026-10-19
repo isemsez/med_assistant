@@ -16,7 +16,7 @@ aborting a healthy stream (owner report 2026-10-14). Scattered repeats
 are not loops; only a unit repeated verbatim back-to-back is.
 
 Abort is done by the caller (llm.chat_stream): raising out of the
-httpx.stream context closes the connection, which cancels Ollama
+    httpx.stream context closes the connection, which cancels llama-server
 generation.
 """
 

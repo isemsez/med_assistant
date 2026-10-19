@@ -52,7 +52,7 @@ def check_model(endpoint, timeout=5.0):
         entries = data.get("data") or data.get("models") or []
         ids = {e.get("id") or e.get("name") for e in entries}
         # config names are often aliases without the tag (medgemma-cpu ==
-        # medgemma-cpu:latest for Ollama); match those too
+        # medgemma-cpu:latest for the previous backend); match those too
         if not (endpoint["model"] in ids
                 or any(i and i.startswith(endpoint["model"] + ":") for i in ids)):
             return {"ok": False, "error": f"model {endpoint['model']!r} not in "
