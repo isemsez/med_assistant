@@ -238,7 +238,15 @@ class TestChat(Base):
         self.assertIn(("reasoning_reset",
                        {"note": "Зацикливание размышлений — перезапускаю."}),
                       events)
-        reasoning = "".join(d["t"] for e, d in events if e == "reasoning")
+        # reasoning before a reset is cleared (client-side semantics): only
+        # post-reset reasoning counts (owner decision 2026-10-14)
+        reasoning_parts = []
+        for e, d in events:
+            if e == "reasoning_reset":
+                reasoning_parts = []
+            elif e == "reasoning":
+                reasoning_parts.append(d["t"])
+        reasoning = "".join(reasoning_parts)
         self.assertEqual(reasoning, "заново")
         msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
         self.assertEqual(msgs[1]["reasoning"], "заново")

@@ -335,9 +335,24 @@ def chat(req: ChatRequest):
         try:
             parts, reasoning_parts, failed = [], [], False
             t_answer = time.monotonic()
-            # medgemma's reasoning always starts with a stray "thought\n"; it
-            # arrives split across stream deltas, so it is dropped char-wise
-            drop = len("thought\n")
+            # Stray-prefix filter: Ollama-era medgemma reasoning always began
+            # with a literal "thought\n"; llama-server pre-opens <think> and
+            # the artifact disappears (2026-10-18 backend port). The prefix is
+            # matched across deltas and dropped only when it is actually
+            # present — a clean backend loses nothing.
+            prefix = [""]
+
+            def _strip_stray(t):
+                if prefix[0] is None:
+                    return t
+                buf = prefix[0] + t
+                stray = "thought\n"
+                if len(buf) < len(stray) and stray.startswith(buf):
+                    prefix[0] = buf
+                    return ""
+                prefix[0] = None
+                return buf[len(stray):] if buf.startswith(stray) else buf
+
             it = pipe.stream_answer(question, history, card=card_ctx,
                                     drug=drug, cancel=turn.cancel)
             try:
@@ -346,12 +361,9 @@ def chat(req: ChatRequest):
                         stopped = True
                         break
                     if event["type"] == "reasoning":
-                        t = event["text"]
-                        if drop:
-                            d = min(drop, len(t))
-                            t, drop = t[d:], drop - d
-                            if not t:
-                                continue
+                        t = _strip_stray(event["text"])
+                        if not t:
+                            continue
                         reasoning_parts.append(t)
                         yield _sse("reasoning", {"t": t})
                     elif event["type"] == "reasoning_reset":
@@ -359,7 +371,7 @@ def chat(req: ChatRequest):
                         # retry restarts reasoning from scratch (2026-10-06).
                         # The note replaces the old silent wipe so the restart
                         # is visible (owner report 2026-10-14)
-                        reasoning_parts, drop = [], len("thought\n")
+                        reasoning_parts, prefix[0] = [], ""
                         yield _sse("reasoning_reset", {
                             "note": "Зацикливание размышлений — перезапускаю."})
                     else:

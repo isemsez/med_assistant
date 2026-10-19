@@ -15,5 +15,6 @@ data/backups/
 logs/
 .pytest_cache/
 .idea/
+/.kilo/kilo.jsonc
 .kilo/plans/
 models/*.gguf

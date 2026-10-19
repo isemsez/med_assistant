@@ -10,11 +10,21 @@ Cards never contain URLs — the model picks ids, Python renders URLs.
 import hashlib
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 import numpy as np
 
 from . import llm
+
+
+def norm_text(s):
+    """NFC-normalize: the register mixes composed and decomposed Cyrillic
+    (й as U+0439 vs и+U+0306), and the same name/MKБ string under two
+    guidelines must embed to ONE vector — an NFD/NFC pair scored apart by
+    ~1e-3 was enough to flip a golden top-1 (2026-10-18). Queries are
+    normalized through the same helper in GuidelineIndex.search."""
+    return unicodedata.normalize("NFC", s)
 
 # trailing parenthetical that is pure ICD-code annotation, e.g.
 # «Диабетическая полинейропатия (E10-E14+ с общим четвертым знаком .4)» ->
@@ -39,10 +49,11 @@ def doc_texts(meta):
     МКБ variants are stripped of trailing ICD-code parentheticals (pure
     annotation noise for the embedder) and deduped after stripping.
     """
-    name = (meta.get("name") or "").strip()
+    name = norm_text((meta.get("name") or "").strip())
     texts = [name] if name else []
     for part in (meta.get("mkb_names") or "").split(";"):
         p = _ICD_PARENTH.sub("", part.strip()).strip()
+        p = norm_text(p)
         if p and p not in texts:
             texts.append(p)
     return texts
@@ -52,6 +63,15 @@ def build_index(docs, embed_endpoint, out_dir, batch=64):
     """docs: {code_version: meta} -> writes vectors.npy + meta.json in out_dir.
 
     Returns (n_docs, n_rows). Vectors are L2-normalized float32.
+
+    Identical texts (the same name/MKБ variant can belong to several
+    guidelines, e.g. «Фибрилляция и трепетание предсердий» under both the
+    arrhythmia and the SVT recommendation) are embedded ONCE and the vector
+    is shared by every row with that text: batched embedding is not
+    bit-stable across batch positions, and a 3e-4 float jitter on a
+    duplicated string was enough to flip a golden top-1 (2026-10-18,
+    llama.cpp port). Exact ties then fall to the deterministic
+    code_version tiebreak in search_vectors.
     """
     rows, texts = [], []
     for cv, meta in docs.items():
@@ -59,8 +79,10 @@ def build_index(docs, embed_endpoint, out_dir, batch=64):
             rows.append({"code_version": cv, "name": (meta.get("name") or "").strip(),
                          "text": t})
             texts.append(t)
-    vectors = llm.embed(embed_endpoint, texts, batch=batch)
-    mat = np.asarray(vectors, dtype=np.float32)
+    uniq = list(dict.fromkeys(texts))
+    vecs = llm.embed(embed_endpoint, uniq, batch=batch)
+    by_text = dict(zip(uniq, vecs))
+    mat = np.asarray([by_text[t] for t in texts], dtype=np.float32)
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     mat = mat / norms
@@ -127,7 +149,8 @@ class GuidelineIndex:
 
     def search(self, query_variants, embed_endpoint, top_k=5, batch=64):
         """Embed query variants (list[str]) -> top-K cards."""
-        vecs = llm.embed(embed_endpoint, list(query_variants), batch=batch)
+        vecs = llm.embed(embed_endpoint,
+                         [norm_text(v) for v in query_variants], batch=batch)
         return self.search_vectors(vecs, top_k=top_k)
 
 

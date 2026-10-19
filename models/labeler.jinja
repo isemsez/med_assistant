@@ -1,0 +1,55 @@
+{# Labeler chat template for llama-server (port of the Ollama medgemma-labeler
+   modelfile TEMPLATE, owner decision 2026-10-18: llama.cpp backend).
+
+   Render rules, replicating what Ollama produced for the app's real
+   payloads ([system, user] labeler calls; verified token-for-token against
+   Ollama /api/generate context captures):
+   - first user turn: "<start_of_turn>user" + system + "\n" + content
+     (system only when non-empty; no newline after "user" - Ollama's Go
+     template {{- trimmed it)
+   - later user turns: "<start_of_turn>user" + content (glued)
+   - assistant turns: "<start_of_turn>model\n" + content
+
+   THINKING (byte-exact with Ollama): the suffix keeps the original closed
+   "<think>\n\n</think>\n\n\n" block. The model briefly re-opens <think> in
+   its output (a dozen-ish tokens before the answer - this is exactly what
+   production did: Ollama's parser split the re-opened tags, the labeler's
+   128-200 token budgets covered thinking + JSON). --reasoning-format
+   deepseek performs the same split here; the guarded branches below signal
+   think-capability to llama.cpp's probes (inputs the app never sends). A
+   pre-opened think suffix was measured to make the labeler reason at essay
+   length (700+ tokens, empty content at budget) - rejected 2026-10-18.
+
+   The two guarded branches below serve llama.cpp's think-capability probes
+   (a synthetic assistant message with reasoning_content; a render with
+   enable_thinking=true) - inputs the app never sends - so every real
+   request renders deterministically.
+
+   Launch: llama-server --chat-template-file models/labeler.jinja
+           --reasoning-format deepseek --alias medgemma-labeler #}
+{%- set sys = '' -%}
+{%- if messages[0]['role'] == 'system' -%}
+  {%- set sys = messages[0]['content'] -%}
+{%- endif -%}
+{%- set ns = namespace(first=true) -%}
+{%- for message in messages -%}
+  {%- if message['role'] == 'system' -%}
+  {%- elif message['role'] == 'user' -%}
+    {%- if ns.first and sys -%}
+      {%- set ns.first = false -%}
+      {{- '<start_of_turn>user' ~ sys ~ '\n' ~ message['content'] ~ '<end_of_turn>\n' -}}
+    {%- else -%}
+      {%- set ns.first = false -%}
+      {{- '<start_of_turn>user' ~ message['content'] ~ '<end_of_turn>\n' -}}
+    {%- endif -%}
+  {%- elif message['role'] == 'assistant' -%}
+    {%- if message['reasoning_content'] is defined -%}
+      {{- '<start_of_turn>model\n<think>' ~ message['reasoning_content'] ~ '</think>\n' ~ message['content'] ~ '<end_of_turn>\n' -}}
+    {%- else -%}
+      {{- '<start_of_turn>model\n' ~ message['content'] ~ '<end_of_turn>\n' -}}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+  {{- '<start_of_turn>model\n<think>\n\n</think>\n\n\n' -}}
+{%- endif -%}

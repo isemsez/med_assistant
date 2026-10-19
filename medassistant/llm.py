@@ -16,6 +16,67 @@ from .loopguard import LoopGuard
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
+# JSON-string GBNF fragment shared by schema_to_grammar below (llama.cpp
+# grammar mode, owner decision 2026-10-18: llama-server's response_format
+# json_schema/json_object crashes on Gemma-style vocabs — the autoparser
+# grammar cannot accept the " model" leading-space piece of the generation
+# header — while a user-supplied "grammar" field is exempt from the buggy
+# prompt prefill and constrains generation identically).
+_GBNF_STRING = ('string ::= "\\"" ( [^"\\\\\\x7F\\x00-\\x1F] | "\\\\" '
+                '(["\\\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] '
+                '[0-9a-fA-F] [0-9a-fA-F]) )* "\\""')
+_GBNF_WS = 'ws ::= [ \\t\\n]*'
+
+
+def schema_to_grammar(schema, root="root"):
+    """Minimal JSON-Schema -> GBNF for llama.cpp's request-level "grammar"
+    field. Supports exactly the constructs the labeler schemas use — flat
+    objects of required array-of-string properties (pipeline.EXTRACT_SCHEMA /
+    SELECT_SCHEMA), plus scalars for future variants. Raises ValueError on
+    anything else; the caller then falls back to response_format.
+    """
+    def rule(s):
+        if "enum" in s:
+            # enum of strings only (the labeler's candidate ids); the GBNF
+            # literal must contain the JSON quotes themselves (\"id\")
+            if not all(isinstance(v, str) for v in s["enum"]):
+                raise ValueError("grammar mode supports string enums only")
+            alts = [v.replace("\\", "\\\\").replace('"', '\\"')
+                    for v in s["enum"]]
+            return "(" + " | ".join(f'"\\"{a}\\""' for a in alts) + ")"
+        t = s.get("type")
+        if t == "string":
+            return "string"
+        if t == "integer":
+            return '"-"? [0-9]+'
+        if t == "number":
+            return '"-"? [0-9]+ ("." [0-9]+)? (("e"|"E") ("+"|"-")? [0-9]+)?'
+        if t == "boolean":
+            return '("true"|"false")'
+        if t == "array":
+            item = rule(s.get("items") or {"type": "string"})
+            max_items = s.get("maxItems")
+            if isinstance(max_items, int) and max_items >= 1:
+                # bounded repetition: a greedy-degenerate labeler cannot
+                # append ids forever — the grammar itself caps the array
+                # (2026-10-18: an unbounded picks array looped until
+                # truncation and the unclosed object failed to parse)
+                return f'"[" ws ({item} (ws "," ws {item}){{0,{max_items - 1}}})? ws "]"'
+            return f'"[" ws ({item} (ws "," ws {item})*)? ws "]"'
+        if t == "object":
+            props = s.get("properties") or {}
+            req = s.get("required") or []
+            if not props or any(p not in req for p in props):
+                raise ValueError("grammar mode needs all-required properties")
+            parts = []
+            for k, v in props.items():
+                parts.append(f'ws "\\"{k}\\"" ws ":" ws {rule(v)}')
+            return '"{" ' + " ".join(parts) + ' ws "}"'
+        raise ValueError(f"unsupported schema type: {t!r}")
+
+    body = rule(schema)
+    return f"{root} ::= {body}\n{_GBNF_STRING}\n{_GBNF_WS}"
+
 
 class LLMError(RuntimeError):
     pass
@@ -100,14 +161,31 @@ def _sleep(i):
 
 
 def chat(endpoint, messages, temperature=0.0, max_tokens=2048,
-         json_schema=None, json_mode=False, timeout=300, attempts=4):
+          json_schema=None, json_mode=False, timeout=300, attempts=4):
     """Non-streaming completion -> content string."""
     kw = {"messages": messages, "temperature": temperature, "max_tokens": max_tokens}
     if json_schema is not None:
-        kw["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {"name": "out", "schema": json_schema, "strict": True},
-        }
+        if config.STRUCTURED_OUTPUT == "grammar":
+            # llama.cpp grammar mode: schema -> GBNF in the request-level
+            # "grammar" field (user grammars skip the buggy autoparser
+            # prefill; see schema_to_grammar). Falls back to response_format
+            # when the schema uses constructs the converter does not cover.
+            try:
+                kw["grammar"] = schema_to_grammar(json_schema)
+            except ValueError:
+                kw["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "out", "schema": json_schema,
+                                    "strict": True},
+                }
+        elif config.STRUCTURED_OUTPUT == "response_format":
+            kw["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "out", "schema": json_schema,
+                                "strict": True},
+            }
+        # STRUCTURED_OUTPUT=none: no response_format, no grammar — the
+        # labeler thinks and llm.parse_json_object extracts the object
     elif json_mode:
         kw["response_format"] = {"type": "json_object"}
     url = f"{endpoint['base_url']}/chat/completions"

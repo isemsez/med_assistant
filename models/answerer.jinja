@@ -1,0 +1,52 @@
+{# Answerer chat template for llama-server (port of the Ollama medgemma-cpu
+   modelfile TEMPLATE, owner decision 2026-10-18: llama.cpp backend).
+
+   Byte-exact replica of what Ollama rendered in production with think=true
+   (Ollama's default for thinking-capable models over the OpenAI endpoint;
+   verified token-for-token against Ollama /api/generate context captures):
+   - first user turn: "<start_of_turn>user" + "SYSTEM INSTRUCTION: think
+     silently if needed. " + (system or the default persona) + "\n" + content
+     (no newline after "user" - Ollama's Go template {{- trimmed it)
+   - later user turns: "<start_of_turn>user" + content (still glued)
+   - assistant turns: "<start_of_turn>model\n" + content
+   - generation suffix: "<start_of_turn>model\n" (no think block - the model
+     opens <think> itself; --reasoning-format deepseek splits the stream)
+
+   Think-capability signaling (llama.cpp): the server decides whether to
+   split reasoning from content by probing the template - a render of a
+   synthetic assistant message carrying reasoning_content, and a render with
+   enable_thinking=true. The two guarded branches below serve exactly those
+   probes: they emit <think> machinery ONLY for inputs the app never sends
+   (history messages carry plain content only; the app never sets
+   enable_thinking). For every real request the render stays byte-identical
+   to the Ollama original.
+
+   Every emitted byte lives inside the string concatenations - the file's own
+   newlines are all trimmed away, so the render cannot drift with reformatting.
+   Launch: llama-server --chat-template-file models/answerer.jinja
+           --reasoning-format deepseek --alias medgemma-answerer -c 12288 #}
+{%- set sys = '' -%}
+{%- if messages[0]['role'] == 'system' -%}
+  {%- set sys = messages[0]['content'] -%}
+{%- endif -%}
+{%- set ns = namespace(first=true) -%}
+{%- for message in messages -%}
+  {%- if message['role'] == 'system' -%}
+  {%- elif message['role'] == 'user' -%}
+    {%- if ns.first -%}
+      {%- set ns.first = false -%}
+      {{- '<start_of_turn>userSYSTEM INSTRUCTION: think silently if needed. ' ~ (sys if sys else 'You are a helpful medical assistant.') ~ '\n' ~ message['content'] ~ '<end_of_turn>\n' -}}
+    {%- else -%}
+      {{- '<start_of_turn>user' ~ message['content'] ~ '<end_of_turn>\n' -}}
+    {%- endif -%}
+  {%- elif message['role'] == 'assistant' -%}
+    {%- if message['reasoning_content'] is defined -%}
+      {{- '<start_of_turn>model\n<think>' ~ message['reasoning_content'] ~ '</think>\n' ~ message['content'] ~ '<end_of_turn>\n' -}}
+    {%- else -%}
+      {{- '<start_of_turn>model\n' ~ message['content'] ~ '<end_of_turn>\n' -}}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+  {{- '<start_of_turn>model\n' -}}
+{%- endif -%}

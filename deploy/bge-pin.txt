@@ -1,0 +1,14 @@
+# Pinned bge-m3 F16 GGUF for the embeddings server (llama-server :8083).
+# This is byte-for-byte the blob Ollama's library/bge-m3 serves (the sha256
+# IS the registry blob digest), so the llama.cpp index rebuild produces the
+# same vectors the Ollama-served model produced — no parity drift from a
+# re-quantized third-party GGUF.
+#
+# url:    https://registry.ollama.ai/v2/library/bge-m3/blobs/sha256:daec91ffb5dd0c27411bd71f29932917c49cf529a641d0168496c3a501e3062c
+# sha256: daec91ffb5dd0c27411bd71f29932917c49cf529a641d0168496c3a501e3062c
+# size:   1157671200 (~1.1 GB, F16)
+#
+# Serving: llama-server -m models\bge-m3-f16.gguf --embeddings --pooling cls
+#          --alias bge-m3 (CLS pooling per the bge-m3 model card).
+url=https://registry.ollama.ai/v2/library/bge-m3/blobs/sha256:daec91ffb5dd0c27411bd71f29932917c49cf529a641d0168496c3a501e3062c
+sha256=daec91ffb5dd0c27411bd71f29932917c49cf529a641d0168496c3a501e3062c

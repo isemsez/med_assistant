@@ -85,6 +85,24 @@ ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "3072"))
 LABELER_EXTRACT_MAX_TOKENS = int(os.environ.get("LABELER_EXTRACT_MAX_TOKENS", "200"))
 LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "128"))
 
+# Structured output transport (owner decision 2026-10-18, llama.cpp backend):
+# llama-server's response_format json_schema/json_object crashes on
+# Gemma-style vocabularies (autoparser grammar cannot accept the " model"
+# leading-space piece during prompt prefill). Two working transports:
+#   none            - no response_format: the labeler thinks (reasoning is
+#                     split server-side), parse_json_object tolerates fences
+#                     and prose — production parity with the Ollama stack
+#                     (the shipped default)
+#   grammar         - GBNF via schema_to_grammar in the request-level
+#                     "grammar" field: guaranteed-valid JSON but no thinking
+#                     (the grammar forces the first token), which measurably
+#                     weakens candidate selection (canary 2026-10-18)
+#   response_format - OpenAI json_schema (Ollama and other servers)
+STRUCTURED_OUTPUT = os.environ.get("STRUCTURED_OUTPUT", "response_format")
+if STRUCTURED_OUTPUT not in {"none", "grammar", "response_format"}:
+    raise SystemExit(f"STRUCTURED_OUTPUT must be none|grammar|response_format, "
+                     f"got {STRUCTURED_OUTPUT!r}")
+
 # Answerer thinking-loop watchdog (owner decision 2026-10-06): abort a
 # degenerate pre-content reasoning loop, retry once with an
 # anti-repetition nudge. LOOP_GUARD=0 disables the watchdog.

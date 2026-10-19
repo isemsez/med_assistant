@@ -244,10 +244,23 @@ class Pipeline:
         # user message actually contains (no «ответ ассистента» section)
         system = (prompts.SYSTEM_LABELER_SELECT_DIRECT if not answer
                   else prompts.SYSTEM_LABELER_SELECT)
+        # per-call schema (owner decision 2026-10-18, llama.cpp port): the
+        # pickable ids are exactly the candidate code_versions and the array
+        # is bounded by the candidate count — under grammar mode an
+        # unbounded free-string array let a greedy-degenerate labeler loop
+        # ids until truncation, and the unclosed object failed to parse
+        schema = {"type": "object",
+                  "properties": {"picks": {
+                      "type": "array",
+                      "items": {"type": "string",
+                                "enum": [c["code_version"] for c in cards]},
+                      "maxItems": len(cards)}},
+                  "required": ["picks"],
+                  "additionalProperties": False}
         raw = self._labeler_chat(system,
                                  _select_user(question, answer, disease, cards),
                                  config.LABELER_SELECT_MAX_TOKENS,
-                                 SELECT_SCHEMA)
+                                 schema)
         if self.audit:
             self.audit.log("labeler_select", disease=disease, raw=raw,
                            dur_s=round(time.monotonic() - t0, 2))
