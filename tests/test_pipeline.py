@@ -423,6 +423,49 @@ class TestManualAppendix(unittest.TestCase):
                                 if r["stage"] == "diseases"))
 
 
+class TestSelectCoTSchema(unittest.TestCase):
+    """Owner decision 2026-10-20 (root-cause fix for empty picks): the
+    grammar forces the first generated token to be "{", so the selector
+    cannot re-open think before the JSON — it reasons INSIDE the constrained
+    JSON instead: a required "reasoning" string property emitted FIRST
+    (GBNF property order = dict insertion order). The parser stays lenient:
+    picks-only output (test fakes, CLI answer files) keeps parsing."""
+
+    def _select(self, raw):
+        seen = {}
+
+        def fake_labeler_chat(system, user, max_tokens, schema):
+            seen["schema"] = schema
+            seen["max_tokens"] = max_tokens
+            return raw
+
+        pipe = make_pipe(select_fn=None)  # CARDS scores dodge auto-pick
+        pipe._labeler_chat = fake_labeler_chat
+        res = pipe.run_appendix(Q, A, extract_fn=lambda q, a: ["ХСН"])
+        return res, seen
+
+    def test_select_schema_reasoning_before_picks(self):
+        res, seen = self._select('{"reasoning": "разбор", "picks": ["2_1"]}')
+        self.assertEqual(res.status, "ok")
+        self.assertEqual(list(seen["schema"]["properties"]),
+                         ["reasoning", "picks"])
+        self.assertEqual(seen["schema"]["required"], ["reasoning", "picks"])
+        reasoning = seen["schema"]["properties"]["reasoning"]
+        self.assertEqual(reasoning["maxLength"], 700, "grammar-bounded CoT")
+        picks = seen["schema"]["properties"]["picks"]
+        self.assertEqual(picks["items"]["enum"],
+                         [c["code_version"] for c in CARDS])
+        self.assertEqual(picks["maxItems"], len(CARDS))
+        from medassistant import config
+        self.assertEqual(seen["max_tokens"], config.LABELER_SELECT_MAX_TOKENS)
+        self.assertEqual(res.by_disease[0]["picks"][0]["code_version"], "2_1")
+
+    def test_picks_only_output_still_parses(self):
+        res, _ = self._select('{"picks": ["2_1"]}')
+        self.assertEqual(res.status, "ok")
+        self.assertEqual(res.by_disease[0]["picks"][0]["code_version"], "2_1")
+
+
 class TestCardContext(unittest.TestCase):
     ENDPOINT = {"base_url": "http://x/v1", "api_key": "k", "model": "m",
                 "extra_body": {}}
@@ -567,6 +610,16 @@ class TestPromptSilence(unittest.TestCase):
                   prompts.SYSTEM_LABELER_EXTRACT_DIRECT,
                   prompts.SYSTEM_LABELER_SELECT):
             self.assertIn("JSON", p)
+
+    def test_extract_prompt_has_bare_answer_fallback(self):
+        # owner decision 2026-10-20: «А при инсульте?» -> «Да.» extracted no
+        # disease (the answer names none) and the stroke guideline was
+        # missed; the extract prompt must pin the question fallback
+        from medassistant import prompts
+        self.assertIn("возьми заболевание из вопроса",
+                      prompts.SYSTEM_LABELER_EXTRACT)
+        self.assertNotIn("возьми заболевание из вопроса",
+                         prompts.SYSTEM_LABELER_EXTRACT_DIRECT)
 
 
 class TestStreamAnswerLoopRetry(unittest.TestCase):

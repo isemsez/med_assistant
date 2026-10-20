@@ -16,15 +16,16 @@ from .loopguard import LoopGuard
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
-# JSON-string GBNF fragment shared by schema_to_grammar below (llama.cpp
+# JSON-string GBNF fragments shared by schema_to_grammar below (llama.cpp
 # grammar mode, owner decision 2026-10-18: llama-server's response_format
 # json_schema/json_object crashes on Gemma-style vocabs — the autoparser
 # grammar cannot accept the " model" leading-space piece of the generation
 # header — while a user-supplied "grammar" field is exempt from the buggy
 # prompt prefill and constrains generation identically).
-_GBNF_STRING = ('string ::= "\\"" ( [^"\\\\\\x7F\\x00-\\x1F] | "\\\\" '
-                '(["\\\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] '
-                '[0-9a-fA-F] [0-9a-fA-F]) )* "\\""')
+_GBNF_CHAR = ('( [^"\\\\\\x7F\\x00-\\x1F] | "\\\\" '
+              '(["\\\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] '
+              '[0-9a-fA-F] [0-9a-fA-F]) )')
+_GBNF_STRING = f'string ::= "\\"" {_GBNF_CHAR}* "\\""'
 _GBNF_WS = 'ws ::= [ \\t\\n]*'
 
 
@@ -46,6 +47,14 @@ def schema_to_grammar(schema, root="root"):
             return "(" + " | ".join(f'"\\"{a}\\""' for a in alts) + ")"
         t = s.get("type")
         if t == "string":
+            max_len = s.get("maxLength")
+            if isinstance(max_len, int) and max_len >= 0:
+                # bounded string (owner decision 2026-10-20): an unbounded
+                # GBNF string can absorb the whole token budget — a
+                # degenerate reasoning field repeated itself to
+                # truncation and the object never closed. The grammar
+                # itself caps the field, so the JSON always parses
+                return (f'"\\"" {_GBNF_CHAR}{{0,{max_len}}} "\\""')
             return "string"
         if t == "integer":
             return '"-"? [0-9]+'

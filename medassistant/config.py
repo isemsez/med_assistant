@@ -83,7 +83,12 @@ DRUG_PS_MAX = int(os.environ.get("DRUG_PS_MAX", "5"))
 
 ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "3072"))
 LABELER_EXTRACT_MAX_TOKENS = int(os.environ.get("LABELER_EXTRACT_MAX_TOKENS", "200"))
-LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "128"))
+# 480 (owner decision 2026-10-20): the reasoning-first select schema puts the
+# per-candidate CoT inside the grammar JSON — a full 5-candidate enumeration
+# measured ~300 tokens live, and the bounded (maxLength 700) reasoning
+# string must always fit together with picks: truncation there leaves the
+# object unclosed and fails the parse
+LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "480"))
 
 # Structured output transport (owner decision 2026-10-18, llama.cpp backend):
 # llama-server's response_format json_schema/json_object crashes on

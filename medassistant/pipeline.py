@@ -89,7 +89,13 @@ def _select_user(question, answer, disease, cards):
         m = c.get("matched")
         extra = f" (совпавший термин: «{m}»)" if m and m != c["name"] else ""
         lines.append(f"{i}. {c['code_version']} — {c['name']}{extra}")
-    lines.append("\nВыведи JSON: {\"picks\": [идентификаторы подходящих кандидатов]}.")
+    # the skeleton tail is load-bearing (probed live 2026-10-20): with it the
+    # model enumerates every candidate with verdicts and picks correctly; an
+    # instruction-only tail reasoned right but still emitted picks=[]; a
+    # prose example value echoed verbatim into reasoning
+    lines.append("\nВыведи JSON: {\"reasoning\": \"1. <идентификатор> — "
+                 "<подходит или не подходит: почему>. 2. …\", "
+                 "\"picks\": [идентификаторы подходящих кандидатов]}.")
     return "\n".join(lines)
 
 
@@ -255,14 +261,26 @@ class Pipeline:
         # pickable ids are exactly the candidate code_versions and the array
         # is bounded by the candidate count — under grammar mode an
         # unbounded free-string array let a greedy-degenerate labeler loop
-        # ids until truncation, and the unclosed object failed to parse
+        # ids until truncation, and the unclosed object failed to parse.
+        # "reasoning" comes FIRST (owner decision 2026-10-20): grammar mode
+        # forces the first generated token to be "{", so the model cannot
+        # re-open think like the old Ollama transport — the GBNF property
+        # order makes it reason per candidate inside the JSON before picks,
+        # the root-cause fix for empty picks (schema_to_grammar emits
+        # required properties in dict order). maxLength 700 bounds the
+        # reasoning string in the grammar itself: an unbounded string ran
+        # degenerate to the token cap and left the object unclosed (live
+        # probe 2026-10-20); at the cap the grammar slams the string shut
+        # and the JSON still parses
         schema = {"type": "object",
-                  "properties": {"picks": {
+                  "properties": {"reasoning": {"type": "string",
+                                                "maxLength": 700},
+                                 "picks": {
                       "type": "array",
                       "items": {"type": "string",
                                 "enum": [c["code_version"] for c in cards]},
                       "maxItems": len(cards)}},
-                  "required": ["picks"],
+                  "required": ["reasoning", "picks"],
                   "additionalProperties": False}
         raw = self._labeler_chat(system,
                                  _select_user(question, answer, disease, cards),

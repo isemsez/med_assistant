@@ -5,12 +5,23 @@ post-hoc guideline verification appendix. The authoritative design is
 [`.kilo/architecture.md`](.kilo/architecture.md); this README is the runbook.
 
 Pipeline: ANSWERER (plain medical model, guideline-blind) → LABELER call 1
-(diseases as JSON) → TOOL `search_guidelines` (embedding index, top-5 cards, no
+(diseases as JSON; answer-anchored, but a bare answer that names no disease —
+e.g. «Да.» to «А при инсульте?» — takes the disease from the question,
+2026-10-20: bare confirmations extracted `[]` and the guideline was missed) →
+TOOL `search_guidelines` (embedding index, top-5 cards, no
 URLs) → LABELER call 2 (pick ids or none) → RENDERER (register PDF links under
-the untouched answer). After selection, a unique candidate whose guideline
-title contains the extracted disease verbatim is kept even if the selector
-dropped it (title guard, 2026-10-19: llama.cpp grammar mode cannot think before
-JSON, unlike the old Ollama transport). Failures surface as honest notes;
+the untouched answer). Labeler call 2 reasons INSIDE the grammar JSON: the
+per-call schema requires a per-candidate "reasoning" string before "picks"
+(2026-10-20, root-cause fix for empty picks — llama.cpp grammar mode forces
+the first generated token to "{" and cannot think before the JSON, unlike
+the old Ollama transport; the reasoning string is grammar-bounded
+(`maxLength` 700 — an unbounded one ran degenerate to the token cap and left
+the object unclosed, live probe 2026-10-20) and `LABELER_SELECT_MAX_TOKENS`
+is 128 → 480 so the full enumeration always fits).
+After selection, a unique candidate whose guideline title contains the
+extracted disease verbatim is kept even if the selector dropped it (title
+guard, 2026-10-19, kept as a safety net — e.g. for empty-string reasoning,
+which stays grammar-legal). Failures surface as honest notes;
 nothing is retried at the semantic level. Delivered as a chat web app.
 
 UX (architecture.md §6): the answerer's reasoning
@@ -169,6 +180,15 @@ by `python -m medassistant.launcher` or `Start.bat`:
 - embeddings (:8083): bge-m3-f16 GGUF, `--embeddings --pooling cls`,
   alias `bge-m3`, `-c 8192 -np 4`.
 
+The answerer and labeler are two llama-server processes not for a GPU/CPU
+split (the launcher picks ONE backend for the whole stack) but because a chat
+template binds per process — llama.cpp has no per-request template on
+/chat/completions, and the roles need different byte-exact prompt tails
+(think-open vs pre-closed think) — plus the background appendix of one turn
+can overlap the next turn's answerer stream (two processes never queue behind
+each other); on CPU both mmap the same GGUF, so the second instance costs ≈
+KV cache only (owner decision 2026-10-20: keep both).
+
 Web app stays on 8866.
 
 Ollama is **dropped** as the supported backend. `llm.py` is pure
@@ -260,6 +280,10 @@ Answer-file rows: `{"question", "raw_answer"}` (live labeler + search) or with
   through the real pipeline (`--no-e2e` for fast checks only); exit 1 on
   failure. Also the opt-in startup check of the launcher (`--canary` / 4 s
   keypress countdown on a bare hand-click launch; owner decision 2026-10-04).
+  E2E pick check (2026-10-20): labeler 1 follows the ANSWER, and the temp-0
+  answerer sometimes answers about the question's other disease — the E2E
+  then accepts a pick whose guideline title matches the extracted disease
+  (the expected guideline check runs first, strictly).
 - `python -m medassistant regression` — `tests/goldens.jsonl` against live
   endpoints: deterministic search-tier rows (disease → expected top-1
   guideline) and full-tier rows (question → whole pipeline, tolerant name

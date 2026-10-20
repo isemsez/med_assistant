@@ -210,12 +210,17 @@ final answer = raw answer + appendix block (local PDF links only)
 
 ### [2] Labeler — extraction call
 
-- A **separate model instance** (today: same 4B, thinking off, on a second
-  Ollama instance on the iGPU; tomorrow: whatever labeler model the tier
-  provides).
+- A **separate model instance** (today: same 4B, thinking off, on its own
+  llama-server process with the think-suppressing `labeler.jinja`; tomorrow:
+  whatever labeler model the tier provides).
 - Input: question + raw answer. Output: **JSON list of disease names**
-  (nominative case), `[]` when the answer is organizational/procedural or
-  names no disease.
+  (nominative case), `[]` when neither names a disease.
+- Answer-anchored with a question fallback (owner decision 2026-10-20):
+  primarily the diseases the answer discusses; when the answer names none
+  itself (a bare «да»/«нет» confirmation), the disease comes from the
+  question — a «Да.» answer to «А при инсульте?» must still anchor the
+  stroke guideline (bare confirmations extracted `[]` before the fallback,
+  missing the disease the physician asked about).
 - Output is schema-constrained (structured decoding), temperature 0, small
   token budget.
 - Several diseases may be extracted; each is processed independently
@@ -249,13 +254,31 @@ final answer = raw answer + appendix block (local PDF links only)
 - This is the step that adds the relevance judgment a similarity threshold
   cannot make: the threshold can't read the answer; this call can.
 - Bounded: exactly one selection call, no agentic loop. Per-call no-retry.
-- Title guard (owner decision 2026-10-19): after selection, a candidate whose
-  guideline title contains the extracted disease verbatim is restored if the
-  selector dropped it — but only when exactly one candidate matches (a
-  generic «инфаркт» keeps «Острый инфаркт миокарда…»; adult/pediatric
-  duplicates stay with the selector). The llama.cpp grammar transport cannot
-  reproduce Ollama's think-then-JSON selection, so this deterministic check
-  protects the one case where the title itself proves relevance.
+- Reasoning inside the grammar JSON (owner decision 2026-10-20, root-cause
+  fix for empty picks): llama.cpp grammar mode constrains generation from the
+  first token, so the selector cannot re-open `think` before the JSON like
+  the old Ollama transport did — without inference steps it collapsed to
+  `{"picks": []}` on ambiguous candidates. The per-call schema now requires
+  a `"reasoning"` string property emitted BEFORE `"picks"` (GBNF emits
+  required properties in dict order): the model writes a brief per-candidate
+  verdict, then decides. Chain-of-thought and guaranteed-valid JSON at once.
+  The reasoning string is grammar-bounded (`maxLength` 700 — an unbounded
+  string can absorb the whole token budget: a degenerate run repeated
+  itself to truncation and left the object unclosed, live probe 2026-10-20;
+  at the cap the grammar closes the string and the JSON still parses) and
+  `LABELER_SELECT_MAX_TOKENS` is 128 → 480 (a full 5-candidate enumeration
+  measured ~300 tokens live). The numbered-skeleton candidate tail in the
+  user prompt is load-bearing (probed live: instruction-only tails reasoned
+  right but still emitted `picks: []`; prose example values echoed verbatim).
+  The parser stays lenient — picks-only output still parses
+  (test fakes, CLI answer files).
+- Title guard (owner decision 2026-10-19, kept as a safety net): after
+  selection, a candidate whose guideline title contains the extracted disease
+  verbatim is restored if the selector dropped it — but only when exactly one
+  candidate matches (a generic «инфаркт» keeps «Острый инфаркт миокарда…»;
+  adult/pediatric duplicates stay with the selector). With the
+  reasoning-first fix the guard mainly nets grammar-legal empty-string
+  reasoning on verbatim-title cases.
 
 ### [5] Renderer
 

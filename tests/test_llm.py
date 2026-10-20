@@ -42,6 +42,46 @@ class TestSchemaToGrammar(unittest.TestCase):
         self.assertIn('\\"reasoning\\"', g)
         self.assertIn('\\"picks\\"', g)
 
+    def test_property_order_is_dict_order(self):
+        # owner decision 2026-10-20: the select schema puts "reasoning" FIRST
+        # so the grammar makes the model reason inside the JSON before picks
+        # (root-cause fix for empty picks under grammar mode)
+        for props, expected in (
+            ({"reasoning": {"type": "string"},
+              "picks": {"type": "string"}}, ["reasoning", "picks"]),
+            ({"picks": {"type": "string"},
+              "reasoning": {"type": "string"}}, ["picks", "reasoning"]),
+        ):
+            g = llm.schema_to_grammar({
+                "type": "object", "properties": props,
+                "required": list(props), "additionalProperties": False,
+            })
+            root_line = g.splitlines()[0]
+            self.assertLess(root_line.index(f'\\"{expected[0]}\\"'),
+                            root_line.index(f'\\"{expected[1]}\\"'),
+                            f"expected {expected} in order")
+
+    def test_bounded_string_max_length(self):
+        # owner decision 2026-10-20: the select reasoning field is capped IN
+        # the grammar (maxLength -> bounded repetition) — an unbounded string
+        # can absorb the whole token budget and leave the JSON unclosed
+        g = llm.schema_to_grammar({
+            "type": "object",
+            "properties": {"reasoning": {"type": "string", "maxLength": 700},
+                           "picks": {"type": "string"}},
+            "required": ["reasoning", "picks"],
+            "additionalProperties": False,
+        })
+        self.assertIn("{0,700}", g)
+        # unbounded strings keep the shared `string` rule reference
+        g2 = llm.schema_to_grammar({
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+            "required": ["x"],
+            "additionalProperties": False,
+        })
+        self.assertIn("ws string", g2.splitlines()[0])
+
     def test_single_property_object_has_no_comma(self):
         g = llm.schema_to_grammar({
             "type": "object",
