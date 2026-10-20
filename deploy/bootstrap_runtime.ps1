@@ -113,6 +113,15 @@ if ($pthContent -match '(?m)^\s*#\s*import\s+site\s*$') {
     Write-Host "Appended 'import site' to $($PthFile.Name)."
 }
 
+# 3b. Put the app root on sys.path. Embedded Python resolves sys.path from the
+# ._pth file and ignores CWD/PYTHONPATH, so Start.bat's `-m medassistant.launcher`
+# would fail without an explicit relative entry (.. = the extracted zip root).
+$pthContent = Get-Content -LiteralPath $PthFile.FullName -Raw
+if ($pthContent -notmatch '(?m)^\s*\.\.\s*$') {
+    Add-Content -LiteralPath $PthFile.FullName -Value "`r`n.."
+    Write-Host "Added '..' to $($PthFile.Name) (app root on sys.path)."
+}
+
 $PythonExe = Join-Path $Target 'python.exe'
 if (-not (Test-Path -LiteralPath $PythonExe)) { throw "python.exe missing at $PythonExe after extraction." }
 

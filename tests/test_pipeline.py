@@ -224,6 +224,44 @@ class TestAutoPick(unittest.TestCase):
         self.assertFalse(res.by_disease[0]["auto_pick"])
 
 
+class TestTitleGuard(unittest.TestCase):
+    """A unique verbatim title match survives labeler over-filtering."""
+
+    CARDS = [
+        {"code_version": "1_1", "name": "Ишемический инсульт и транзиторная "
+                                        "ишемическая атака", "score": 0.70},
+        {"code_version": "2_1", "name": "Острый инфаркт миокарда с подъемом "
+                                        "сегмента ST электрокардиограммы",
+         "score": 0.66},
+    ]
+
+    def _run(self, disease, picks, cards=None):
+        pipe = make_pipe(search_fn=lambda v: list(cards or self.CARDS),
+                         select_fn=lambda q, a, d, c: list(picks))
+        return pipe.run_appendix(Q, A, diseases=[disease])
+
+    def test_added_when_labeler_returns_empty(self):
+        res = self._run("инфаркт", [])
+        self.assertEqual(res.status, "ok")
+        self.assertEqual([p["code_version"]
+                          for p in res.by_disease[0]["picks"]], ["2_1"])
+        self.assertEqual(res.filtered_out[0]["code_version"], "1_1")
+
+    def test_added_to_nonempty_picks(self):
+        res = self._run("инфаркт миокарда", ["1_1"])
+        self.assertEqual([p["code_version"]
+                          for p in res.by_disease[0]["picks"]],
+                         ["1_1", "2_1"])
+
+    def test_ambiguous_titles_left_to_labeler(self):
+        cards = self.CARDS + [
+            {"code_version": "3_1", "name": "Инфаркт миокарда у детей",
+             "score": 0.60}]
+        res = self._run("инфаркт", [], cards=cards)
+        self.assertIsNone(res.appendix_text)
+        self.assertEqual(len(res.filtered_out), 3)
+
+
 class TestIterAppendix(unittest.TestCase):
     def test_stage_sequence_happy_path(self):
         pipe = make_pipe()

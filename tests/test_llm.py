@@ -27,6 +27,43 @@ def ok(content):
     return FakeResp(payload={"choices": [{"message": {"content": content}}]})
 
 
+class TestSchemaToGrammar(unittest.TestCase):
+    def test_multi_property_object_has_comma(self):
+        g = llm.schema_to_grammar({
+            "type": "object",
+            "properties": {"reasoning": {"type": "string"},
+                           "picks": {"type": "array",
+                                     "items": {"type": "string", "enum": ["a", "b"]},
+                                     "maxItems": 2}},
+            "required": ["reasoning", "picks"],
+            "additionalProperties": False,
+        })
+        self.assertIn('ws "," ws', g)
+        self.assertIn('\\"reasoning\\"', g)
+        self.assertIn('\\"picks\\"', g)
+
+    def test_single_property_object_has_no_comma(self):
+        g = llm.schema_to_grammar({
+            "type": "object",
+            "properties": {"picks": {"type": "string"}},
+            "required": ["picks"],
+            "additionalProperties": False,
+        })
+        self.assertNotIn('ws "," ws', g)
+
+    def test_bounded_array_and_enum(self):
+        g = llm.schema_to_grammar({
+            "type": "object",
+            "properties": {"picks": {"type": "array",
+                                     "items": {"type": "string", "enum": ["a", "b"]},
+                                     "maxItems": 2}},
+            "required": ["picks"],
+            "additionalProperties": False,
+        })
+        self.assertIn('{0,1}', g)
+        self.assertIn('\\"a\\"', g)
+
+
 class TestParseJsonObject(unittest.TestCase):
     def test_clean(self):
         self.assertEqual(llm.parse_json_object('{"a": 1}'), {"a": 1})
@@ -342,7 +379,7 @@ class TestStreamCancel(unittest.TestCase):
     def test_cancel_wakes_blocked_reader_and_drops_connection(self):
         # prefill window: headers, then silence; cancel must raise
         # LLMCancelled long before the silence ends, and the server-side
-        # peer must see the connection drop (Ollama then cancels generation)
+        # peer must see the connection drop (llama-server then cancels generation)
         srv = _SSEServer(silent_s=8.0)
         try:
             cancel = llm.StreamCancel()

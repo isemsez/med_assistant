@@ -334,7 +334,7 @@ class TestChat(Base):
 
 class TestStop(Base):
     """User stop of the answerer (owner decision 2026-10-15): POST
-    /api/sessions/{id}/stop drops the Ollama connection, the stream ends
+    /api/sessions/{id}/stop drops the llama-server connection, the stream ends
     with a `stopped` event, and the half-finished turn's rows are deleted
     (undo send). Answerer phase only — completed turns are untouchable."""
 

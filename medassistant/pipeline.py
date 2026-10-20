@@ -7,6 +7,7 @@ Stage functions are injectable for offline tests and CLI mock runs.
 """
 
 import json
+import re
 import time
 
 from . import appendix, config, llm, prompts
@@ -62,6 +63,12 @@ class AppendixResult:
             "appendix_text": self.appendix_text,
             "filtered_out": self.filtered_out,
         }
+
+
+def _title_key(text):
+    """Lowercase, ё→е, punctuation collapsed — for title containment checks."""
+    text = (text or "").lower().replace("ё", "е")
+    return " ".join(re.sub(r"[^\w]+", " ", text).split())
 
 
 def _extract_user(question, answer):
@@ -285,6 +292,27 @@ class Pipeline:
 
     # -- appendix machinery -----------------------------------------------
 
+    def _title_guard(self, disease, cards, picks):
+        """Keep the one guideline whose title contains the disease verbatim.
+
+        The think-suppressed labeler sometimes returns []/a subset even when a
+        candidate's title is the disease itself (llama.cpp grammar mode cannot
+        match the old Ollama think-then-JSON behavior; 2026-10-19). A unique
+        verbatim title match is definitionally relevant, so it is appended
+        when the selector dropped it. Ambiguous titles (two or more matches,
+        e.g. adult vs pediatric forms) are left to the labeler.
+        """
+        key = _title_key(disease)
+        if not key or not cards:
+            return picks, None
+        hits = [c for c in cards if key in _title_key(c.get("name", ""))]
+        if len(hits) != 1:
+            return picks, None
+        cv = hits[0]["code_version"]
+        if cv in picks:
+            return picks, None
+        return [*picks, cv], cv
+
     def _auto_pick(self, cards):
         """The clearly dominating candidate, or None (labeler 2 then runs).
 
@@ -429,6 +457,11 @@ class Pipeline:
                         notes=notes + [appendix.NOTE_SELECT_ERROR])}
                     return
                 auto = False
+                picks, guarded = self._title_guard(disease, cards, picks)
+                if guarded and self.audit:
+                    self.audit.log("select_title_guard", disease=disease,
+                                   session_id=session_id, code_version=guarded,
+                                   picks=picks)
             if self.audit:
                 self.audit.log("picks", disease=disease, session_id=session_id,
                                picks=picks, auto=auto)

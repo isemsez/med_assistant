@@ -3,6 +3,8 @@ param(
     [string]$StagingRoot = (Join-Path $env:TEMP 'kilo\med_assistant_deploy'),
     [string]$ZipName = 'medassistant.zip',
     [string]$ZipDir,
+    [ValidateSet('Optimal', 'Fastest', 'NoCompression')]
+    [string]$CompressionLevel = 'Fastest',
     [switch]$KeepStaging
 )
 
@@ -29,7 +31,7 @@ foreach ($g in 'medgemma1.5-4b-q4km-text-only.gguf', 'bge-m3-f16.gguf') {
     }
 }
 
-$StagingApp = Join-Path $StagingRoot 'medassistant'
+$StagingApp = Join-Path $StagingRoot 'med_assistant'
 if (-not $ZipDir) { $ZipDir = $RepoRoot }
 $ZipPath = Join-Path $ZipDir $ZipName
 
@@ -55,12 +57,27 @@ $DataWhitelist = @(
     'drug_aliases.yaml',
     'patient_cards'
 )
+# Local-only entries: runtime artifacts and build-time inputs that must exist
+# in the dev tree but are never staged. Anything outside both lists is a stray
+# file the whitelist copy would silently ignore — fail loudly instead.
+$DataLocalOnly = @(
+    'backups',
+    'sessions.sqlite',
+    'sessions.sqlite-shm',
+    'sessions.sqlite-wal',
+    'grls.xlsx',
+    'inn_gloss.yaml',
+    'inn_list_en-lat.txt',
+    'Запись 2026-10-17 150627.mp4'
+)
 $DataTop = Get-ChildItem -LiteralPath $DataSrc -Force -ErrorAction SilentlyContinue
-$Bad = $DataTop | Where-Object { -not ($_.Name -in $DataWhitelist) }
+$Bad = $DataTop | Where-Object {
+    -not ($_.Name -in $DataWhitelist) -and -not ($_.Name -in $DataLocalOnly)
+}
 if ($Bad) {
     $names = ($Bad | ForEach-Object { $_.Name }) -join ', '
-    throw "data\ contains non-whitelisted entries that would ship: $names. "
-        + "Remove them (or add to the whitelist) before building."
+    throw "data\ contains unexpected entries that the whitelist copy would ignore: $names. "
+        + "Remove them, or add them to `$DataLocalOnly` if they are local-only."
 }
 
 # --- llama.cpp pin hash (for the dist-manifest) ------------------------------
@@ -197,9 +214,10 @@ foreach ($w in $DataWhitelist) {
     }
 }
 
-# --- .env + README.txt at zip root -------------------------------------------
-Write-Host "Copying .env and README.txt ..."
+# --- .env + Start.bat + README.txt at zip root --------------------------------
+Write-Host "Copying .env, Start.bat and README.txt ..."
 Copy-Item -LiteralPath (Join-Path $RepoRoot '.env') -Destination (Join-Path $StagingApp '.env') -Force
+Copy-Item -LiteralPath (Join-Path $RepoRoot 'Start.bat') -Destination (Join-Path $StagingApp 'Start.bat') -Force
 $Readme = Join-Path $PSScriptRoot 'README.txt'
 if (Test-Path -LiteralPath $Readme) {
     Copy-Item -LiteralPath $Readme -Destination (Join-Path $StagingApp 'README.txt') -Force
@@ -232,15 +250,18 @@ foreach ($h in $HideTargets) {
     if (Test-Path -LiteralPath $h) { & attrib +h "$h" /d }
 }
 
-# --- create UTF-8 zip, top folder medassistant\ ------------------------------
-Write-Host "Creating zip (UTF-8, top folder medassistant\)..."
+# --- create UTF-8 zip, top folder med_assistant\ ------------------------------
+Write-Host "Creating zip (UTF-8, top folder med_assistant\, compression $CompressionLevel)..."
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
+$ZipSw = [System.Diagnostics.Stopwatch]::StartNew()
 [System.IO.Compression.ZipFile]::CreateFromDirectory(
     $StagingApp, $ZipPath,
-    [System.IO.Compression.CompressionLevel]::Optimal,
+    [System.IO.Compression.CompressionLevel]$CompressionLevel,
     $true,
     [System.Text.Encoding]::UTF8)
+$ZipSw.Stop()
+Write-Host "Zip written in $([math]::Round($ZipSw.Elapsed.TotalSeconds, 1)) s."
 
 # --- embed Hidden flag on the coding-dir folder entries ----------------------
 Write-Host "Embedding Hidden flag on python/, engine/, medassistant/ folder entries..."

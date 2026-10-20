@@ -7,8 +7,11 @@ post-hoc guideline verification appendix. The authoritative design is
 Pipeline: ANSWERER (plain medical model, guideline-blind) → LABELER call 1
 (diseases as JSON) → TOOL `search_guidelines` (embedding index, top-5 cards, no
 URLs) → LABELER call 2 (pick ids or none) → RENDERER (register PDF links under
-the untouched answer). Failures surface as honest notes; nothing is retried at
-the semantic level. Delivered as a chat web app.
+the untouched answer). After selection, a unique candidate whose guideline
+title contains the extracted disease verbatim is kept even if the selector
+dropped it (title guard, 2026-10-19: llama.cpp grammar mode cannot think before
+JSON, unlike the old Ollama transport). Failures surface as honest notes;
+nothing is retried at the semantic level. Delivered as a chat web app.
 
 UX (architecture.md §6): the answerer's reasoning
 streams into a collapsible «Размышления модели» block (auto-collapses when the
@@ -148,7 +151,8 @@ pwsh deploy/build_deploy_zip.ps1
 ```
 
 Target machine: extract `medassistant.zip` anywhere (short path, e.g.
-`C:\medassistant`), then double-click `Start.bat`. No Docker, no internet, no
+`C:\med_assistant`; the archive's top folder is `med_assistant\`), then
+double-click `Start.bat`. No Docker, no internet, no
 prerequisites.
 
 ## Models (owner decision 2026-10-18)

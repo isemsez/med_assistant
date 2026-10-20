@@ -71,7 +71,7 @@ def schema_to_grammar(schema, root="root"):
             parts = []
             for k, v in props.items():
                 parts.append(f'ws "\\"{k}\\"" ws ":" ws {rule(v)}')
-            return '"{" ' + " ".join(parts) + ' ws "}"'
+            return '"{" ' + ' ws "," '.join(parts) + ' ws "}"'
         raise ValueError(f"unsupported schema type: {t!r}")
 
     body = rule(schema)

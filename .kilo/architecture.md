@@ -249,6 +249,13 @@ final answer = raw answer + appendix block (local PDF links only)
 - This is the step that adds the relevance judgment a similarity threshold
   cannot make: the threshold can't read the answer; this call can.
 - Bounded: exactly one selection call, no agentic loop. Per-call no-retry.
+- Title guard (owner decision 2026-10-19): after selection, a candidate whose
+  guideline title contains the extracted disease verbatim is restored if the
+  selector dropped it — but only when exactly one candidate matches (a
+  generic «инфаркт» keeps «Острый инфаркт миокарда…»; adult/pediatric
+  duplicates stay with the selector). The llama.cpp grammar transport cannot
+  reproduce Ollama's think-then-JSON selection, so this deterministic check
+  protects the one case where the title itself proves relevance.
 
 ### [5] Renderer
 
