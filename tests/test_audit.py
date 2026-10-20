@@ -1,8 +1,24 @@
+import datetime
 import tempfile
 import unittest
 from pathlib import Path
 
-from medassistant.audit import Audit
+from medassistant.audit import Audit, TS_FMT, utc_ts
+
+
+class TestTsFormat(unittest.TestCase):
+    def test_utc_ts_moscow_local_format(self):
+        # owner decision 2026-10-20: "2026/10/17-14:33:45", Moscow local,
+        # no offset suffix — and stats._parse_ts round-trips it exactly
+        ts = utc_ts()
+        self.assertRegex(ts, r"^\d{4}/\d{2}/\d{2}-\d{2}:\d{2}:\d{2}$")
+        dt = datetime.datetime.strptime(ts, TS_FMT)
+        self.assertAlmostEqual((dt - datetime.datetime.now()).total_seconds(),
+                               0, delta=2)
+        self.assertEqual(
+            __import__("medassistant.stats", fromlist=["_parse_ts"])._parse_ts(
+                {"ts": ts}),
+            dt)
 
 
 class TestRotation(unittest.TestCase):

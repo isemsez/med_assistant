@@ -19,10 +19,16 @@ from pathlib import Path
 from . import config
 
 
+TS_FMT = "%Y/%m/%d-%H:%M:%S"
+
+
 def utc_ts():
-    """One timestamp format across audit/store/health — stats._parse_ts
-    round-trips exactly this, so it must never diverge per copy."""
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    """One timestamp format across audit/store/health — Moscow local wall
+    clock ("2026/10/17-14:33:45", no offset suffix; host TZ is Moscow),
+    owner decision 2026-10-20. stats._parse_ts round-trips exactly this
+    (legacy ISO-UTC lines still in rotation windows convert there), so it
+    must never diverge per copy."""
+    return datetime.datetime.now().strftime(TS_FMT)
 
 
 # back-compat alias for older imports

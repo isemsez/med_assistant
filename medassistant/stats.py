@@ -11,6 +11,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from .audit import TS_FMT
+
 ERROR_STAGES = {"stage_stop", "labeler_extract_invalid", "labeler_select_invalid",
                 "labeler_schema_fallback", "appendix_crash"}
 LATENCY_BY_STAGE = {  # record stage -> latency field source
@@ -21,9 +23,24 @@ LATENCY_BY_STAGE = {  # record stage -> latency field source
 }
 
 
+def _now_naive(dt):
+    """Aware datetime -> naive Moscow-local wall clock (the ts format is
+    naive local); naive passes through."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt
+
+
 def _parse_ts(rec):
+    """ts -> naive Moscow-local datetime: the current format first
+    (audit.TS_FMT), legacy ISO-UTC lines (still in rotation windows)
+    convert to the same wall clock."""
     try:
-        return datetime.datetime.fromisoformat(rec["ts"])
+        return datetime.datetime.strptime(rec["ts"], TS_FMT)
+    except (KeyError, ValueError, TypeError):
+        pass
+    try:
+        return _now_naive(datetime.datetime.fromisoformat(rec["ts"]))
     except (KeyError, ValueError, TypeError):
         return None
 
@@ -57,7 +74,7 @@ def read_records(path, days=None, now=None):
     if not p.is_file():
         return [], 0
     if days is not None:
-        now = now or datetime.datetime.now(datetime.timezone.utc)
+        now = _now_naive(now or datetime.datetime.now())
         cutoff = now - datetime.timedelta(days=days)
     out, skipped = [], 0
     for f in _audit_files(p):

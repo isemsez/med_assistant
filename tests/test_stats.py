@@ -13,6 +13,50 @@ def ts(minutes_ago):
     return (NOW - datetime.timedelta(minutes=minutes_ago)).isoformat()
 
 
+class TestNewFormatWindow(unittest.TestCase):
+    # the 2026-10-20 audit format ("2026/10/17-14:33:45" Moscow local) must
+    # round-trip through _parse_ts, and legacy ISO lines still inside the
+    # rotation window must mixed-parse unchanged
+    KILO_DAY = datetime.datetime(2026, 10, 17, 14, 33, 45)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = Path(self.tmp) / "audit.jsonl"
+
+    def write(self, recs):
+        self.path.write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in recs) + "\n",
+            encoding="utf-8")
+
+    def test_new_format_counts_and_window(self):
+        from medassistant.audit import TS_FMT
+        msk_now = datetime.datetime.now()
+        self.write([
+            {"ts": msk_now.strftime(TS_FMT), "stage": "question", "question": "q"},
+            {"ts": (msk_now - datetime.timedelta(
+                days=3)).strftime(TS_FMT), "stage": "question", "question": "old"},
+        ])
+        s = stats.collect(self.path, days=1)
+        self.assertEqual(s["turns"], 1)
+        s = stats.collect(self.path, days=None)
+        self.assertEqual(s["turns"], 2)
+
+    def test_mixed_new_and_legacy_iso(self):
+        from medassistant.audit import TS_FMT
+        msk_now = datetime.datetime.now()
+        self.write([
+            {"ts": msk_now.strftime(TS_FMT), "stage": "question", "question": "new"},
+            {"ts": (datetime.datetime.now(datetime.timezone.utc)
+                    - datetime.timedelta(minutes=30)).isoformat(timespec="seconds"),
+             "stage": "question", "question": "legacy"},
+        ])
+        s = stats.collect(self.path, days=1)
+        self.assertEqual(s["turns"], 2)
+        self.assertEqual(stats._parse_ts({"ts": "not-a-date"}), None)
+        parsed = stats._parse_ts({"ts": self.KILO_DAY.strftime(TS_FMT)})
+        self.assertEqual(parsed, self.KILO_DAY)
+
+
 class TestCollect(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
