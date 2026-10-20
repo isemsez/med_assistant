@@ -1,9 +1,10 @@
 @echo off
-rem Idempotent: re-hide the coding directories (python\, engine\, medassistant\)
-rem so Explorer/.NET extracts don't expose internals. Safe to run repeatedly.
-rem Also invoked by Start.bat on first run.
+rem Idempotent: re-hide everything except Start.bat and README.txt after
+rem unpacking so Explorer extracts give the doctor a one-click folder.
+rem Covers launcher, data, models, logs - .env and dist-manifest.json too;
+rem logs exists only after the first run. Safe to run repeatedly.
+rem Invoked by Start.bat on every run.
 pushd "%~dp0.."
-attrib +h "python"  /d 2>nul
-attrib +h "engine"  /d 2>nul
-attrib +h "medassistant" /d 2>nul
+for %%D in (python engine medassistant data launcher logs models) do attrib +h "%%D" /d 2>nul
+for %%F in (.env dist-manifest.json) do attrib +h "%%F" 2>nul
 popd

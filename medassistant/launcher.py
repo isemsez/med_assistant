@@ -333,6 +333,7 @@ def decide_backend(force_cpu=False, force_gpu=False):
                 " (no discrete GPU found - iGPU-only or none)"))
     else:
         _say("backend: cpu (no display adapters found)")
+    print()
     return backend
 
 
@@ -446,6 +447,7 @@ def start_web(stamp, quit, foreground=False):
 
 def stop_all(skip_web, quit):
     _say("Stopping assistant:")
+    print()
     targets = [(label, port) for label, port in
                [(f"llama-server {role}", port) for role, port in SERVERS]
                + ([("web app", WEB_PORT)] if not skip_web else [])]
@@ -457,6 +459,7 @@ def stop_all(skip_web, quit):
     for _, port in targets:
         if not wait_port_closed(port):
             _warn(f"  :{port} still open after stopping")
+    print()
     quit(0, 2.0)
 
 

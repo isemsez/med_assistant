@@ -240,14 +240,20 @@ $Manifest | ConvertTo-Json -Depth 10 |
     Set-Content -LiteralPath (Join-Path $StagingApp 'dist-manifest.json') -Encoding UTF8 -NoNewline
 
 # --- mark internals Hidden on staging ----------------------------------------
-Write-Host "Marking internals Hidden on staging (python\, engine\, medassistant\)..."
-$HideTargets = @(
-    (Join-Path $StagingApp 'python'),
-    (Join-Path $StagingApp 'engine'),
-    (Join-Path $StagingApp 'medassistant')
-)
-foreach ($h in $HideTargets) {
-    if (Test-Path -LiteralPath $h) { & attrib +h "$h" /d }
+# Everything except Start.bat and README.txt (matching hide_coding_dirs.bat;
+# logs\ is a runtime artifact and cannot be staged). archivers that restore
+# attributes from the zip flag these directly; Explorer extracts rely on
+# launcher\hide_coding_dirs.bat, invoked by Start.bat on every run.
+Write-Host "Marking internals Hidden on staging..."
+$HideDirs = @('python', 'engine', 'medassistant', 'data', 'launcher', 'models')
+$HideFiles = @('.env', 'dist-manifest.json')
+foreach ($h in $HideDirs) {
+    $p = Join-Path $StagingApp $h
+    if (Test-Path -LiteralPath $p) { & attrib +h "$p" /d }
+}
+foreach ($f in $HideFiles) {
+    $p = Join-Path $StagingApp $f
+    if (Test-Path -LiteralPath $p) { & attrib +h "$p" }
 }
 
 # --- create UTF-8 zip, top folder med_assistant\ ------------------------------
@@ -263,18 +269,26 @@ $ZipSw = [System.Diagnostics.Stopwatch]::StartNew()
 $ZipSw.Stop()
 Write-Host "Zip written in $([math]::Round($ZipSw.Elapsed.TotalSeconds, 1)) s."
 
-# --- embed Hidden flag on the coding-dir folder entries ----------------------
-Write-Host "Embedding Hidden flag on python/, engine/, medassistant/ folder entries..."
+# --- embed Hidden flag on the internal folder/file entries --------------------
+# CreateFromDirectory writes no directory entries for non-empty dirs, so the
+# per-dir entry is re-created if missing. .env/dist-manifest.json are file
+# entries (no trailing slash, no Directory flag).
+Write-Host "Embedding Hidden flag on internal entries ($($HideDirs -join ','), $($HideFiles -join ','))..."
 $archive = [System.IO.Compression.ZipFile]::Open($ZipPath, [System.IO.Compression.ZipArchiveMode]::Update)
 try {
-    foreach ($h in $HideTargets) {
-        if (-not (Test-Path -LiteralPath $h)) { continue }
-        $rel = $h.Substring($StagingRoot.Length).TrimStart('\','/').Replace('\','/') + '/'
+    foreach ($name in ($HideDirs + $HideFiles)) {
+        $p = Join-Path $StagingApp $name
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        $isDir = (Get-Item -LiteralPath $p -Force).PSIsContainer
+        $rel = $p.Substring($StagingRoot.Length).TrimStart('\','/').Replace('\','/')
+        if ($isDir) { $rel += '/' }
         $entry = $archive.GetEntry($rel)
         if (-not $entry) {
             $entry = $archive.CreateEntry($rel, [System.IO.Compression.CompressionLevel]::NoCompression)
         }
-        $entry.ExternalAttributes = ([int]$entry.ExternalAttributes) -bor $FileAttributeHidden -bor $FileAttributeDirectory
+        $flags = $FileAttributeHidden
+        if ($isDir) { $flags = $flags -bor $FileAttributeDirectory }
+        $entry.ExternalAttributes = ([int]$entry.ExternalAttributes) -bor $flags
     }
 } finally { $archive.Dispose() }
 
@@ -286,6 +300,6 @@ $sizeMB = [math]::Round((Get-Item -LiteralPath $ZipPath).Length / 1MB, 2)
 Write-Host ""
 Write-Host "Done. Built: $ZipPath ($sizeMB MB)"
 Write-Host "dist-manifest: llamacpp $LlamaCppTag ($LlamaCppSha), index stamp $IndexStamp"
-Write-Host "Hidden internals: python/, engine/, medassistant/ folder entries carry Hidden."
+Write-Host "Hidden internals: $(($HideDirs + $HideFiles) -join ', ') entries carry Hidden (logs\ hidden by hide_coding_dirs.bat at runtime)."
 Write-Host "(Total Commander / WinRAR restore it on extract). For Explorer/.NET extracts,"
 Write-Host "run hide_coding_dirs.bat once after unzip."
