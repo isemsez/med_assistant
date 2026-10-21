@@ -11,6 +11,10 @@ DOCS = {
     "3_1": {"name": "Сахарный диабет: ретинопатия", "url": "https://x/3",
             "file": "3_1_Сахарный диабет ретинопатия.pdf"},
     "4_1": {"name": "Старая запись", "url": "https://x/4"},
+    "5_1": {"name": "Головная боль напряжения", "url": "https://x/5",
+            "file": "5_1_Головная боль напряжения.pdf", "age": "Дети"},
+    "6_1": {"name": "Мигрень", "url": "https://x/6",
+            "file": "6_1_Мигрень.pdf", "age": "Взрослые"},
 }
 
 
@@ -56,8 +60,36 @@ class TestResolvePicks(unittest.TestCase):
             self.assertEqual([p["code_version"] for p in picks], ["2_1"])
             self.assertEqual(picks[0]["path"], str(root / "2_1_ХСН.pdf"))
 
+    def test_age_rides_on_the_pick(self):
+        # owner catch 2026-10-21: same-NAME adult/pediatric register
+        # pairs — the audience must travel with the pick so the renderer
+        # can mark it; rows without age (old payloads/fakes) stay bare
+        kids = appendix.resolve_picks(["5_1"], DOCS)[0]
+        self.assertEqual(kids["age"], "Дети")
+        self.assertNotIn("age", appendix.resolve_picks(["2_1"], DOCS)[0])
+
 
 class TestRenderAppendix(unittest.TestCase):
+    def test_pediatric_pick_marked(self):
+        text = appendix.render_appendix([{
+            "disease": "головная боль",
+            "picks": [{"code_version": "5_1", "name": "Головная боль "
+                      "напряжения", "url": "u", "age": "Дети"}],
+        }])
+        self.assertIn("«Головная боль напряжения» (5_1, дети): u", text)
+
+    def test_adult_and_mixed_picks_unmarked(self):
+        text = appendix.render_appendix([{
+            "disease": "мигрень",
+            "picks": [{"code_version": "6_1", "name": "Мигрень", "url": "u",
+                       "age": "Взрослые"},
+                      {"code_version": "7_1", "name": "Астма", "url": "u",
+                       "age": "Взрослые, дети"}],
+        }])
+        self.assertIn("«Мигрень» (6_1): u", text)
+        self.assertIn("«Астма» (7_1): u", text)
+        self.assertNotIn("дети", text.replace("Астма", ""))
+
     def test_prefers_local_path_over_url(self):
         text = appendix.render_appendix([{
             "disease": "хроническая сердечная недостаточность",

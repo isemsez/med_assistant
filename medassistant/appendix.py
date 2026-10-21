@@ -82,6 +82,13 @@ def resolve_picks(picks, docs_meta, clinrec_dir=None):
             pick = {"code_version": cv,
                     "name": (meta.get("name") or "").strip(),
                     "url": meta.get("url") or ""}
+        # the register audience rides on the pick (owner catch
+        # 2026-10-21): same-NAME adult/pediatric pairs exist and the
+        # title alone never says which — the renderer marks pediatric
+        # picks so the doctor can see it
+        age = (meta.get("age") or "").strip()
+        if age:
+            pick["age"] = age
         out.append(pick)
     return out
 
@@ -103,6 +110,10 @@ def render_appendix(by_disease):
         if multi:
             lines.append(f"«{g['disease']}»:")
         for p in g["picks"]:
-            lines.append(f"— «{p['name']}» ({p['code_version']}): "
+            # «, дети» only for pediatric-only docs («Дети» audience):
+            # attaching one to an adult question is the silent-wrong-doc
+            # hazard; adult and mixed docs go unmarked to keep lines short
+            kids = ", дети" if p.get("age") == "Дети" else ""
+            lines.append(f"— «{p['name']}» ({p['code_version']}{kids}): "
                          f"{p.get('path') or p['url']}")
     return "\n".join(lines)

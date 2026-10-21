@@ -27,6 +27,12 @@ _GBNF_CHAR = ('( [^"\\\\\\x7F\\x00-\\x1F] | "\\\\" '
               '[0-9a-fA-F] [0-9a-fA-F]) )')
 _GBNF_STRING = f'string ::= "\\"" {_GBNF_CHAR}* "\\""'
 _GBNF_WS = 'ws ::= [ \\t\\n]*'
+# This pinned llama.cpp build refuses a GBNF {0,N} repeat with N > 1000
+# ("Failed to initialize samplers: failed to parse grammar"; live
+# 2026-10-20: maxLength 700 OK, 1001 FAIL, bisected max accepted = 1000).
+# Bounded strings longer than this are emitted as adjacent repeats that
+# sum to the cap (see schema_to_grammar).
+_GBNF_MAX_REPEAT = 1000
 
 
 def schema_to_grammar(schema, root="root"):
@@ -53,7 +59,21 @@ def schema_to_grammar(schema, root="root"):
                 # GBNF string can absorb the whole token budget — a
                 # degenerate reasoning field repeated itself to
                 # truncation and the object never closed. The grammar
-                # itself caps the field, so the JSON always parses
+                # itself caps the field, so the JSON always parses. This
+                # pinned llama.cpp build refuses a {0,N} repeat with
+                # N > 1000 ("Failed to initialize samplers: failed to
+                # parse grammar"; live 2026-10-20: maxLength 700 OK,
+                # 1001 FAIL, bisected max accepted = 1000), so a bigger
+                # cap is emitted as two adjacent bounded repeats summing
+                # to the cap — char{0,1000} char{0,rest} bounds the
+                # string identically (SELECT_REASONING_MAXLEN 1400
+                # fits); the fall-through return below serves caps
+                # within one repeat
+                head = min(max_len, _GBNF_MAX_REPEAT)
+                tail = max_len - head
+                if tail > 0:
+                    return (f'"\\"" {_GBNF_CHAR}{{0,{head}}} {_GBNF_CHAR}'
+                            f'{{0,{tail}}} "\\""')
                 return (f'"\\"" {_GBNF_CHAR}{{0,{max_len}}} "\\""')
             return "string"
         if t == "integer":

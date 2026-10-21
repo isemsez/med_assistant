@@ -83,12 +83,19 @@ DRUG_PS_MAX = int(os.environ.get("DRUG_PS_MAX", "5"))
 
 ANSWERER_MAX_TOKENS = int(os.environ.get("ANSWERER_MAX_TOKENS", "3072"))
 LABELER_EXTRACT_MAX_TOKENS = int(os.environ.get("LABELER_EXTRACT_MAX_TOKENS", "200"))
-# 480 (owner decision 2026-10-20): the reasoning-first select schema puts the
-# per-candidate CoT inside the grammar JSON — a full 5-candidate enumeration
-# measured ~300 tokens live, and the bounded (maxLength 700) reasoning
-# string must always fit together with picks: truncation there leaves the
-# object unclosed and fails the parse
-LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "480"))
+# 1024 (768 was 2026-10-20's prose-density estimate, falsified live
+# 2026-10-21): the reasoning-first select schema puts the per-candidate CoT
+# inside the grammar JSON — the bounded (maxLength 1400) reasoning string
+# must always fit the generation budget together with picks: a gen-cap cut
+# there leaves the object unclosed and fails the parse (needless
+# labeler_select_invalid). A degenerate short-item echo («5. 154_4 —
+# подходит.» x N, live canary 2026-10-21) runs 1.75 chars/token vs the
+# measured prose ~2.3 — 1400 chars then need ~800 tokens + picks, so the
+# 768 cap chopped the string at 1347 chars BEFORE the grammar clamp could
+# close it; 1024 keeps the char clamp authoritative for any skeleton-
+# shaped echo. Only degenerate runs pay the full cap (healthy enums stop
+# early); the loop guard then drops their picks honestly
+LABELER_SELECT_MAX_TOKENS = int(os.environ.get("LABELER_SELECT_MAX_TOKENS", "1024"))
 
 # Structured output transport (owner decision 2026-10-18, llama.cpp backend):
 # llama-server's response_format json_schema/json_object crashes on

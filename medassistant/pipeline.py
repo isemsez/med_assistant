@@ -10,7 +10,7 @@ import json
 import re
 import time
 
-from . import appendix, config, llm, prompts
+from . import appendix, config, llm, loopguard, prompts
 
 EXTRACT_SCHEMA = {
     "type": "object",
@@ -24,6 +24,14 @@ SELECT_SCHEMA = {
     "required": ["picks"],
     "additionalProperties": False,
 }
+# Grammar cap on the per-candidate "reasoning" string in the per-call select
+# schema (_real_select) — single source of truth for the schema dict and the
+# audit reasoning_truncated check below. 1400 (2026-10-20): the first cap, 700,
+# could not mathematically fit a 5-candidate enumeration — one verdict item
+# measured ~140-173 chars, five ≈ 730+ — so the clamp slammed shut mid-list and
+# shipped picks contradicting the lost verdicts (live 2026-10-20); the terse
+# verdict skeleton keeps a real enumeration ~500 chars, far under the cap.
+SELECT_REASONING_MAXLEN = 1400
 
 
 class AnswererError(RuntimeError):
@@ -71,6 +79,24 @@ def _title_key(text):
     return " ".join(re.sub(r"[^\w]+", " ", text).split())
 
 
+def _dedup_key(name, age=None):
+    """Identity for true-duplicate collapse: (title with parentheticals
+    stripped, register audience). The register holds ZERO same-title-
+    same-audience docs (surveyed 2026-10-21, 757 docs) — same-NAME pairs
+    are always adult/pediatric versions of the recommendation (24 pairs:
+    «Головная боль напряжения» 810_1 дети vs 162_3 взрослые, both
+    «Мигрень», …) and must NEVER merge: the first title-collapse
+    implementation merged them, kept the higher-scoring CHILDREN'S doc
+    and auto-picked it for an adult question (owner catch 2026-10-21).
+    The audience key keeps the collapse armed only for future register
+    refreshes that introduce real same-audience duplicates."""
+    return _title_key(re.sub(r"\([^)]*\)", " ", name or "")), (age or "").strip()
+
+
+_AGE_MARKERS = {"Взрослые": "взрослые", "Дети": "дети",
+                "Взрослые, дети": "взрослые и дети"}
+
+
 def _extract_user(question, answer):
     return f"Вопрос врача:\n{question}\n\nОтвет ассистента:\n{answer}"
 
@@ -81,22 +107,94 @@ def _select_user(question, answer, disease, cards):
         lines.append(f"\nОтвет ассистента:\n{answer}")
     lines.append(f"\nЗаболевание: «{disease}»\n"
                  "\nКандидаты (идентификатор — название клинической рекомендации):")
+    # `matched` (the indexed МКБ variant that pulled the candidate in,
+    # when different from its name) lets the labeler see through
+    # sound-alike noise — a «поли-» prefix match on an unrelated doc —
+    # instead of rubber-stamping every candidate (2026-10-16). A term
+    # SHARED by several candidates is printed on none of them: identical
+    # parentheticals say nothing that picks one candidate over another
+    # and hand the 4B a repetitive hook it echoes verbatim (2026-10-21:
+    # «Синдром «гистаминовой» головной боли» on 3 of 5 lines became a 5x
+    # echo loop in the select reasoning — 23x without the grammar, a ~50x
+    # think-loop to the token cap under the answerer template; the loop
+    # is prompt-fueled, every transport repeated it).
+    shown = [c.get("matched") for c in cards
+             if c.get("matched") and c["matched"] != c["name"]]
+    unique = {m for m in shown if shown.count(m) == 1}
     for i, c in enumerate(cards, 1):
-        # `matched` (the indexed МКБ variant that pulled the candidate in,
-        # when different from its name) lets the labeler see through
-        # sound-alike noise — a «поли-» prefix match on an unrelated doc —
-        # instead of rubber-stamping every candidate (2026-10-16).
         m = c.get("matched")
-        extra = f" (совпавший термин: «{m}»)" if m and m != c["name"] else ""
-        lines.append(f"{i}. {c['code_version']} — {c['name']}{extra}")
+        extra = (f" (совпавший термин: «{m}»)"
+                 if m and m != c["name"] and m in unique else "")
+        # the audience marker (docs_meta `age`, enriched onto the card by
+        # iter_appendix) is load-bearing (owner catch 2026-10-21): the
+        # register holds same-NAME adult/pediatric pairs whose titles
+        # carry no age cue, so without the marker the selector's rule 4
+        # («педиатрические — только если речь о ребёнке») cannot fire and
+        # identical-looking lines feed the echo loop — the blind echo
+        # shipped the CHILDREN'S headache guideline to adult questions
+        marker = _AGE_MARKERS.get((c.get("age") or "").strip())
+        age_part = f" ({marker})" if marker else ""
+        lines.append(f"{i}. {c['code_version']} — {c['name']}{age_part}{extra}")
     # the skeleton tail is load-bearing (probed live 2026-10-20): with it the
     # model enumerates every candidate with verdicts and picks correctly; an
     # instruction-only tail reasoned right but still emitted picks=[]; a
-    # prose example value echoed verbatim into reasoning
+    # prose example value echoed verbatim into reasoning. Per-item verdicts
+    # are terse by design («подходит или не подходит», no «почему»):
+    # explained verdicts measured ~140-173 chars per item and clamped the
+    # capped reasoning string mid-enumeration (2026-10-20)
     lines.append("\nВыведи JSON: {\"reasoning\": \"1. <идентификатор> — "
-                 "<подходит или не подходит: почему>. 2. …\", "
+                 "<подходит или не подходит>. 2. …"
+                 "\", "
                  "\"picks\": [идентификаторы подходящих кандидатов]}.")
     return "\n".join(lines)
+
+
+def _select_reasoning_loop(reasoning):
+    """Degenerate select reasoning -> short reason, else None (2026-10-21).
+
+    Both live degenerations were thinking loops in the answerer-watchdog
+    sense (owner decisions 2026-10-06/14: a unit repeated back-to-back):
+    (a) a verbatim tail-spin — caught by reusing loopguard.LoopGuard on
+    the complete string; (b) a numbered echo or CYCLE — the same item
+    bodies under «1.», «2.»… prefixes (numbers break LoopGuard's verbatim
+    run; a cap-clamped tail also chops the final copy mid-word), so item
+    bodies are compared with the enumeration number stripped and the TAIL
+    must not end with >= 3 back-to-back copies of the same p-item block
+    (p=1 is the plain echo; live 2026-10-21 a deduped 3-candidate list
+    was enumerated cyclically 4x over — [A,B,C]x4 — which consecutive
+    identity alone cannot see). Blocks, not scattered recurrence: a
+    healthy list of distinct candidates never repeats a whole block
+    verbatim (each body carries its candidate id). A looped reasoning
+    judged nothing — its picks are dropped by the caller, the title guard
+    is the net."""
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        return None
+    spin = loopguard.LoopGuard().feed(reasoning)
+    if spin:
+        return spin
+    bodies = []
+    for part in re.split(r"(?<=[.!?])\s+", reasoning):
+        body = re.sub(r"^\s*\d+[.)]\s*", "", part.strip())
+        if body:
+            bodies.append(body)
+    n = len(bodies)
+    # largest period first (the maximal cycle reads cleanest in audit);
+    # up to p-1 trailing bodies may be a partial block — a cap-clamped
+    # tail chops the final copy mid-item and must not hide the cycle
+    for p in range(min(8, n // 3), 0, -1):
+        for drop in range(p):
+            m = n - drop
+            if m < 3 * p:
+                break
+            block = bodies[m - p:m]
+            reps = 1
+            while (reps * p + p <= m
+                   and bodies[m - (reps + 1) * p:m - reps * p] == block):
+                reps += 1
+            if reps >= 3:
+                sample = " | ".join(b[:40] for b in block)[:80]
+                return f"cycle x{reps} (p={p}): …{sample}"
+    return None
 
 
 class Pipeline:
@@ -234,8 +332,27 @@ class Pipeline:
             raise
 
     def _real_extract(self, question, answer):
-        return self._extract_call(prompts.SYSTEM_LABELER_EXTRACT,
-                                  _extract_user(question, answer))
+        # diseases from BOTH sources (owner decision 2026-10-20): the answer
+        # pass is primary (its diseases must not lose DISEASE_CAP slots), the
+        # question pass reuses the pdf-direct prompt over the bare question
+        # — «включи каждое названное заболевание» sticks where questioning
+        # the same pass's rules failed (probed live). A «Да.» answer to
+        # «А при инсульте?» anchors the stroke guideline; a drifted answer
+        # can no longer silently drop an asked-about disease. Merged
+        # answer-first, exact strings deduped; near-forms (e.g.
+        # гипертония/гипертензия) may stay as rare duplicate groups — select
+        # resolves them to the same card.
+        answer_diseases = self._extract_call(prompts.SYSTEM_LABELER_EXTRACT,
+                                             _extract_user(question, answer))
+        question_diseases = self._extract_call(
+            prompts.SYSTEM_LABELER_EXTRACT_DIRECT, question)
+        merged = list(answer_diseases)
+        low = {d.lower() for d in merged}
+        for d in question_diseases:
+            if d.lower() not in low:
+                merged.append(d)
+                low.add(d.lower())
+        return merged
 
     def extract_manual(self, payload):
         """Labeler 1 in direct mode: parse a doctor-typed «pdf » payload
@@ -252,45 +369,90 @@ class Pipeline:
         return self.index.search(variants, self.embed, top_k=config.TOP_K)
 
     def _real_select(self, question, answer, disease, cards):
-        t0 = time.monotonic()
+        """One select call PER RECOMMENDATION TITLE GROUP (owner decision
+        2026-10-21): the 4B cannot enumerate a 5-candidate mixed list
+        without degenerating (live: echo loops 3/3, cyclic enumerations),
+        but judges 1-2 items reliably. Same-NAME adult/pediatric versions
+        share ONE call — the audience choice is comparative, splitting
+        the pair would hide the twin (owner constraint); different
+        recommendations are judged in separate short calls. Picks are
+        unioned; a looped or invalid group fails only itself, and the
+        title guard remains the net over the union."""
         # no answer -> a manual pdf turn: the direct prompt matches what the
         # user message actually contains (no «ответ ассистента» section)
         system = (prompts.SYSTEM_LABELER_SELECT_DIRECT if not answer
                   else prompts.SYSTEM_LABELER_SELECT)
+        groups = {}
+        for c in cards:
+            groups.setdefault(_dedup_key(c["name"])[0], []).append(c)
+        picked = []
+        for group in groups.values():
+            picked += self._select_group(system, question, answer, disease,
+                                         group)
+        return picked
+
+    def _select_group(self, system, question, answer, disease, group):
+        """One labeler call over one title group (see _real_select)."""
+        t0 = time.monotonic()
         # per-call schema (owner decision 2026-10-18, llama.cpp port): the
-        # pickable ids are exactly the candidate code_versions and the array
-        # is bounded by the candidate count — under grammar mode an
-        # unbounded free-string array let a greedy-degenerate labeler loop
-        # ids until truncation, and the unclosed object failed to parse.
+        # pickable ids are exactly the group's code_versions and the array
+        # is bounded by the group size — under grammar mode an unbounded
+        # free-string array let a greedy-degenerate labeler loop ids until
+        # truncation, and the unclosed object failed to parse.
         # "reasoning" comes FIRST (owner decision 2026-10-20): grammar mode
         # forces the first generated token to be "{", so the model cannot
         # re-open think like the old Ollama transport — the GBNF property
         # order makes it reason per candidate inside the JSON before picks,
         # the root-cause fix for empty picks (schema_to_grammar emits
-        # required properties in dict order). maxLength 700 bounds the
-        # reasoning string in the grammar itself: an unbounded string ran
-        # degenerate to the token cap and left the object unclosed (live
-        # probe 2026-10-20); at the cap the grammar slams the string shut
-        # and the JSON still parses
+        # required properties in dict order). SELECT_REASONING_MAXLEN bounds
+        # the reasoning string in the grammar itself: an unbounded string ran
+        # degenerate to the token cap and left the object unclosed
+        # (2026-10-20), and the first cap, 700, was tighter than any
+        # 5-candidate enumeration (~730+ chars measured) — the clamp slammed
+        # shut mid-list and shipped picks contradicting the lost verdicts
+        # (live 2026-10-20); at the cap the grammar slams the string shut and
+        # the JSON still parses
         schema = {"type": "object",
-                  "properties": {"reasoning": {"type": "string",
-                                                "maxLength": 700},
-                                 "picks": {
-                      "type": "array",
-                      "items": {"type": "string",
-                                "enum": [c["code_version"] for c in cards]},
-                      "maxItems": len(cards)}},
+                  "properties": {
+                      "reasoning": {"type": "string",
+                                    "maxLength": SELECT_REASONING_MAXLEN},
+                      "picks": {
+                          "type": "array",
+                          "items": {"type": "string",
+                                    "enum": [c["code_version"]
+                                             for c in group]},
+                          "maxItems": len(group)}},
                   "required": ["reasoning", "picks"],
                   "additionalProperties": False}
+        ids = [c["code_version"] for c in group]
         raw = self._labeler_chat(system,
-                                 _select_user(question, answer, disease, cards),
+                                 _select_user(question, answer, disease,
+                                              group),
                                  config.LABELER_SELECT_MAX_TOKENS,
                                  schema)
-        if self.audit:
-            self.audit.log("labeler_select", disease=disease, raw=raw,
-                           dur_s=round(time.monotonic() - t0, 2))
         try:
             data = llm.parse_json_object(raw)
+        except (llm.LLMError, KeyError, TypeError) as e:
+            if self.audit:
+                self.audit.log("labeler_select", disease=disease, group=ids,
+                               raw=raw,
+                               dur_s=round(time.monotonic() - t0, 2))
+                self.audit.log("labeler_select_invalid", disease=disease,
+                               group=ids, raw=raw, error=str(e))
+            raise llm.LLMError(str(e))
+        # a reasoning string exactly at the grammar cap means the clamp
+        # landed (observability, 2026-10-20): mid-enumeration that ships
+        # unchecked/contradicting picks — the flag is purely observational,
+        # both clamped shapes still parse the same
+        r = data.get("reasoning") if isinstance(data, dict) else None
+        if self.audit:
+            kw = ({"reasoning_truncated": True}
+                  if isinstance(r, str)
+                  and len(r) == SELECT_REASONING_MAXLEN else {})
+            self.audit.log("labeler_select", disease=disease, group=ids,
+                           raw=raw, dur_s=round(time.monotonic() - t0, 2),
+                           **kw)
+        try:
             picks = data["picks"]
             if not isinstance(picks, list) or not all(
                     isinstance(p, str) for p in picks):
@@ -298,17 +460,72 @@ class Pipeline:
         except (llm.LLMError, KeyError, TypeError) as e:
             if self.audit:
                 self.audit.log("labeler_select_invalid", disease=disease,
-                               raw=raw, error=str(e))
+                               group=ids, raw=raw, error=str(e))
             raise llm.LLMError(str(e))
+        # the lenient parse (picks-only fakes, CLI answer files) may emit
+        # ids from other groups — a pick is kept only when it belongs to
+        # THIS call's group, mirroring what the grammar would have forced
         seen, out = set(), []
         for p in picks:
             p = p.strip()
-            if p and p not in seen:
+            if p and p in ids and p not in seen:
                 seen.add(p)
                 out.append(p)
+        # thinking-loop watchdog, select edition (2026-10-21): a looped
+        # reasoning judged nothing — its picks are a blind echo of the
+        # first candidate line (live 09:34 and 14:07: [810_1] off echoes).
+        # The picks are dropped, NOT retried (invalid labeler output is
+        # never retried); only this group's picks die, the other groups
+        # and the title guard still contribute.
+        loop_reason = _select_reasoning_loop(r)
+        if loop_reason:
+            if self.audit:
+                self.audit.log("labeler_select_loop", disease=disease,
+                               group=ids, reason=loop_reason, dropped=out)
+            return []
         return out
 
     # -- appendix machinery -----------------------------------------------
+
+    # audience markers (owner doctrine 2026-10-21): when the turn names
+    # NO audience, a same-NAME adult/pediatric pair must attach BOTH
+    # versions — the doctor chooses himself; any marker (child OR adult
+    # wording) means the turn states its audience and the guard stands
+    # down, leaving the choice to the selector's rule 4
+    _AUDIENCE_MARKERS = ("ребен", "ребён", "детск", "младен", "новорожд",
+                         "подростк", "педиатр", "взросл")
+
+    def _audience_complete(self, question, answer, cards, picks):
+        """Complete a half-picked adult/pediatric pair (owner doctrine
+        2026-10-21: unclear audience -> BOTH versions, the doctor
+        chooses). The 4B stamps one side unpredictably (live: the ГБН
+        pair returned only 810_1 дети on a bare adult-less question,
+        dropping 162_3 взрослые); when one side of a pair is picked,
+        the missing side's best-scored twin is added. Fires only with
+        ZERO audience markers in question+answer; «Взрослые, дети» docs
+        cover both audiences and never need completion."""
+        text = f"{question} {answer or ''}".lower()
+        if any(m in text for m in self._AUDIENCE_MARKERS):
+            return picks, None
+        by_title = {}
+        for c in cards:
+            by_title.setdefault(_dedup_key(c["name"])[0], []).append(c)
+        picked = set(picks)
+        added = []
+        for group in by_title.values():
+            sides = {"Дети": [c for c in group if c.get("age") == "Дети"],
+                     "Взрослые": [c for c in group if c.get("age") == "Взрослые"]}
+            for mine, other in (("Дети", "Взрослые"), ("Взрослые", "Дети")):
+                if (sides[mine] and sides[other]
+                        and any(c["code_version"] in picked
+                                for c in sides[mine])
+                        and not any(c["code_version"] in picked
+                                    for c in sides[other])):
+                    twin = sides[other][0]  # best-scored (retrieval order)
+                    picked.add(twin["code_version"])
+                    picks = picks + [twin["code_version"]]
+                    added.append(twin["code_version"])
+        return picks, (added or None)
 
     def _title_guard(self, disease, cards, picks):
         """Keep the one guideline whose title contains the disease verbatim.
@@ -440,6 +657,42 @@ class Pipeline:
             if not cards:
                 continue
 
+            # audience enrichment (owner catch 2026-10-21): the retrieval
+            # card carries no age, but docs_meta does («Взрослые» / «Дети»
+            # / «Взрослые, дети») and the register holds 24 same-NAME
+            # adult/pediatric pairs whose titles give no cue. The age
+            # rides on the card from here: the select prompt renders it
+            # (rule 4 becomes applicable), dedup keys on it, the appendix
+            # marks pediatric picks. Enriched copies — the search result
+            # dicts are not ours to mutate (injected fakes share them).
+            if self.docs:
+                cards = [
+                    dict(c, age=self.docs[c["code_version"]]["age"])
+                    if self.docs.get(c["code_version"], {}).get("age")
+                    else c
+                    for c in cards]
+
+            # true-duplicate collapse (2026-10-21, reworked same day after
+            # the owner catch): keep ONE candidate per (title, audience) —
+            # same-NAME pairs are adult/pediatric versions and NEVER merge
+            # (the first title-only implementation kept the higher-scoring
+            # CHILDREN'S doc and auto-picked it for an adult question).
+            # The register currently holds zero same-(title, audience)
+            # docs; the collapse stays armed for future refreshes.
+            dropped_dups, seen_keys = [], set()
+            distinct = []
+            for c in cards:
+                k = _dedup_key(c["name"], c.get("age"))
+                if k in seen_keys:
+                    dropped_dups.append(c["code_version"])
+                    continue
+                seen_keys.add(k)
+                distinct.append(c)
+            if dropped_dups and self.audit:
+                self.audit.log("search_dedup", disease=disease,
+                               session_id=session_id, dropped=dropped_dups)
+            cards = distinct
+
             # resolved candidates feed the flat filtered-out list: the UI
             # shows the verified picks and hides everything the selection
             # dropped behind one collapsible
@@ -480,6 +733,12 @@ class Pipeline:
                     self.audit.log("select_title_guard", disease=disease,
                                    session_id=session_id, code_version=guarded,
                                    picks=picks)
+                picks, completed = self._audience_complete(
+                    question, raw_answer, cards, picks)
+                if completed and self.audit:
+                    self.audit.log("select_audience_complete",
+                                   disease=disease, session_id=session_id,
+                                   added=completed, picks=picks)
             if self.audit:
                 self.audit.log("picks", disease=disease, session_id=session_id,
                                picks=picks, auto=auto)

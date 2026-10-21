@@ -82,6 +82,35 @@ class TestSchemaToGrammar(unittest.TestCase):
         })
         self.assertIn("ws string", g2.splitlines()[0])
 
+    def test_bounded_string_above_llamacpp_repeat_limit_splits(self):
+        # the pinned llama.cpp build refuses a GBNF {0,N} repeat with
+        # N > 1000 ("failed to parse grammar"; live 2026-10-20: 700 OK,
+        # 1001 FAIL, bisected max = 1000) — SELECT_REASONING_MAXLEN 1400
+        # is emitted as two adjacent bounded repeats summing to the cap
+        g = llm.schema_to_grammar({
+            "type": "object",
+            "properties": {"reasoning": {"type": "string",
+                                         "maxLength": 1400},
+                           "picks": {"type": "string"}},
+            "required": ["reasoning", "picks"],
+            "additionalProperties": False,
+        })
+        root_line = g.splitlines()[0]
+        self.assertIn("{0,1000}", root_line)
+        self.assertIn("{0,400}", root_line)
+        self.assertLess(root_line.index("{0,1000}"),
+                        root_line.index("{0,400}"),
+                        "splits sum to the cap in emission order")
+        g2 = llm.schema_to_grammar({
+            "type": "object",
+            "properties": {"reasoning": {"type": "string",
+                                         "maxLength": 1000},
+                           "picks": {"type": "string"}},
+            "required": ["reasoning", "picks"],
+            "additionalProperties": False,
+        })
+        self.assertIn("{0,1000}", g2.splitlines()[0])
+
     def test_single_property_object_has_no_comma(self):
         g = llm.schema_to_grammar({
             "type": "object",
