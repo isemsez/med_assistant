@@ -1,8 +1,10 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from medassistant import llm, regression
+from medassistant.audit import Audit
 
 
 class FakeIndex:
@@ -15,11 +17,14 @@ class FakeIndex:
 
 
 class FakePipe:
-    def __init__(self, cards=None, answer="Ответ про ХСН.", result=None):
+    def __init__(self, cards=None, answer="Ответ про ХСН.", result=None,
+                 audit=None, loop=False):
         self.abbr_map = None
         self.index = FakeIndex(cards or [])
         self._answer = answer
         self.result = result
+        self.audit = audit
+        self.loop = loop
 
     def stream_answer(self, question, history=None, max_tokens=None):
         if isinstance(self._answer, Exception):
@@ -27,6 +32,11 @@ class FakePipe:
         yield {"type": "content", "text": self._answer}
 
     def run_appendix(self, question, raw_answer, session_id=None):
+        # a turn that hit the select loop-guard writes the audit row the
+        # full-tier runner must treat as a FAILED row
+        if self.audit is not None and self.loop:
+            self.audit.log("labeler_select_loop", disease="X",
+                           reason="item x4: …echo", dropped=["2_1"])
         return self.result
 
 
@@ -122,6 +132,59 @@ class TestFullRow(unittest.TestCase):
         ok, detail, _ = regression.run_full_row(pipe, self.ROW, 50)
         self.assertFalse(ok)
         self.assertIn("empty", detail)
+
+    def test_select_loop_fails_row_even_with_correct_picks(self):
+        # 2026-10-21 (owner): a select thinking loop is a FAILED full-tier
+        # row even when the title guard or auto-pick shipped correct picks
+        # afterwards — the runtime degrades gracefully, the golden set
+        # demands a healthy selector, nothing is "greenified"
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = Audit(Path(tmp) / "audit.jsonl")
+            pipe = FakePipe(audit=audit, loop=True, result=make_result(
+                picks=[("156_2", "Хроническая сердечная недостаточность")]))
+            ok, detail, _ = regression.run_full_row(pipe, self.ROW, 50)
+        self.assertFalse(ok)
+        self.assertIn("select reasoning loop", detail)
+        self.assertIn("item x4", detail)
+
+    def test_no_loop_records_row_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = Audit(Path(tmp) / "audit.jsonl")
+            pipe = FakePipe(audit=audit, result=make_result(
+                picks=[("156_2", "Хроническая сердечная недостаточность")]))
+            ok, detail, _ = regression.run_full_row(pipe, self.ROW, 50)
+        self.assertTrue(ok)
+
+    def test_loop_only_this_row_not_earlier_ones(self):
+        # the shared throwaway audit accumulates rows — a loop written by
+        # an EARLIER row must not fail later clean rows (slice by line)
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = Audit(Path(tmp) / "audit.jsonl")
+            audit.log("labeler_select_loop", disease="old",
+                      reason="item x5: …", dropped=[])
+            pipe = FakePipe(audit=audit, result=make_result(
+                picks=[("156_2", "Хроническая сердечная недостаточность")]))
+            ok, detail, _ = regression.run_full_row(pipe, self.ROW, 50)
+        self.assertTrue(ok)
+
+    def test_over_pick_fails_row(self):
+        # 2026-10-21: the per-group 4B selector rubber-stamps (live: all
+        # candidates picked) — expect_picks_max fails the row even when
+        # the expected guideline is somewhere in the pile
+        row = {"question": "q?", "expect_name_contains": "недостаточн",
+               "expect_picks_max": 2}
+        pipe = FakePipe(result=make_result(picks=[
+            ("156_2", "Хроническая сердечная недостаточность"),
+            ("1_1", "Грипп"), ("2_2", "Другое")]))
+        ok, detail, _ = regression.run_full_row(pipe, row, 50)
+        self.assertFalse(ok)
+        self.assertIn("expect_picks_max", detail)
+        self.assertIn("rubber-stamp", detail)
+        # at the cap the row passes
+        pipe = FakePipe(result=make_result(picks=[
+            ("156_2", "Хроническая сердечная недостаточность")]))
+        ok, _, _ = regression.run_full_row(pipe, row, 50)
+        self.assertTrue(ok)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,9 @@
 # search tier: {"disease", "expect_name_contains"} — deterministic top-1 over
 #              the real index (abbreviation expansion exercised).
 # full tier:   {"question", "expect_status"?, "expect_name_contains"?} — the
-#              whole pipeline incl. answerer generation (slow on CPU).
+#              whole pipeline incl. answerer generation (slow on CPU); a
+#              labeler_select_loop in the turn FAILS the row even when the
+#              picks are correct (owner decision 2026-10-21).
 
 {"disease": "острый инфаркт миокарда с подъемом сегмента ST электрокардиограммы", "expect_name_contains": "инфаркт"}
 {"disease": "ХСН", "expect_name_contains": "недостаточн"}
@@ -23,3 +25,12 @@
 {"question": "Какие рекомендации по лечению внебольничной пневмонии у взрослых?", "expect_name_contains": "пневмония"}
 {"question": "Как диагностировать и лечить мочекаменную болезнь?", "expect_name_contains": "мочекаменная"}
 {"question": "Как оформить больничный лист пациенту?", "expect_status": "no_disease"}
+# 2026-10-21 loop canary: the turn's retrieval returns an adult/pediatric
+# PAIR for «Головная боль напряжения» (810_1 дети / 162_3 взрослые) and a
+# Мигрень pair; the selector echo-looped on it live (audit 09:34/14:07).
+# Row demands (owner decisions 2026-10-21 evening): a symptom query like
+# «головная боль» MUST attach its guideline pdf (expected: the ADULT «ГБН»
+# version, rule 4), and any labeler_select_loop fails the row. Over-
+# attachment is tolerated when rare (expect_picks_max deliberately NOT
+# set on this row; the check exists for rows that need it).
+{"question": "А просто при головной боли?", "expect_name_contains": "ГБН"}
