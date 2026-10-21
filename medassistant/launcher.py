@@ -180,6 +180,26 @@ def wait_port(port, timeout, poll=0.5):
     return False
 
 
+def wait_model_ready(port, timeout, poll=0.5):
+    """GET /health must return 2xx — llama-server binds its port BEFORE the
+    model finishes loading and answers 503 {"error":"Loading model"} on every
+    endpoint in that window (live 2026-10-21: a TCP-only wait_port let the
+    startup canary's embed probe hit the 503 window on every cold boot —
+    deterministic CANARY FAIL on a healthy stack)."""
+    import urllib.request
+    deadline = time.monotonic() + timeout
+    url = f"http://127.0.0.1:{port}/health"
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as r:
+                if 200 <= r.status < 300:
+                    return True
+        except OSError:  # URLError/HTTPError(503 loading)/conn refused
+            pass
+        time.sleep(poll)
+    return False
+
+
 def wait_port_closed(port, timeout=8.0, poll=0.25):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -413,6 +433,11 @@ def start_servers(backend, stamp, quit):
         _say(f"llama-server {role:<9} :{port} starting (pid {pid})")
         if not wait_port(port, timeout=180):
             _warn(f"port {port} ({role}) did not open within 180s")
+            _kill(pid)
+            quit(1)
+        if not wait_model_ready(port, timeout=180):
+            _warn(f"port {port} ({role}) model did not become ready "
+                  f"within 180s (/health never 200)")
             _kill(pid)
             quit(1)
         prune_boot_logs(f"llama-{role}")

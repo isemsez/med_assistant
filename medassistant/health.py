@@ -66,7 +66,11 @@ def check_embed(endpoint, timeout=120.0):
     """A one-token embed ping must return a vector.
 
     The generous default matches llm.embed: on a cold boot this probe is the
-    first /embeddings request and pays the bge-m3 model load.
+    first /embeddings request and pays the bge-m3 model load. A 503 with
+    "Loading model" is retried briefly — llama-server binds its port before
+    the model loads and 503s every endpoint in that window (2026-10-21);
+    the launcher now gates on /health, this retry covers backends restarted
+    under a running web app.
     """
     if not endpoint.get("base_url") or not endpoint.get("model"):
         return {"ok": False, "error": "endpoint not configured"}
@@ -74,9 +78,15 @@ def check_embed(endpoint, timeout=120.0):
     body = json.dumps(llm._payload(endpoint, input=["пинг"]),
                       ensure_ascii=False).encode("utf-8")
     try:
-        r = httpx.post(url, headers=llm._headers(endpoint), timeout=timeout,
-                       content=body)
-        r.raise_for_status()
+        for attempt in range(6):  # ~30 s of grace for the load window
+            r = httpx.post(url, headers=llm._headers(endpoint), timeout=timeout,
+                           content=body)
+            if r.status_code == 503 and "loading model" \
+                    in r.text.lower() and attempt < 5:
+                time.sleep(5)
+                continue
+            r.raise_for_status()
+            break
         data = r.json()
         vecs = data.get("data") or []
         if not vecs or not (vecs[0].get("embedding") or []):
