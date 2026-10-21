@@ -5,9 +5,10 @@ post-hoc guideline verification appendix. The authoritative design is
 [`.kilo/architecture.md`](.kilo/architecture.md); this README is the runbook.
 
 Pipeline: ANSWERER (plain medical model, guideline-blind) → LABELER call 1
-(diseases as JSON; answer-anchored, but a bare answer that names no disease —
-e.g. «Да.» to «А при инсульте?» — takes the disease from the question,
-2026-10-20: bare confirmations extracted `[]` and the guideline was missed) →
+(diseases as JSON; gathered from BOTH the answer — first — and the question —
+extras after, 2026-10-20: a «Да.» answer to «А при инсульте?» and a drifted
+answer used to extract `[]`/partial and the asked-about guideline was
+missed) →
 TOOL `search_guidelines` (embedding index, top-5 cards, no
 URLs) → LABELER call 2 (pick ids or none) → RENDERER (register PDF links under
 the untouched answer). Labeler call 2 reasons INSIDE the grammar JSON: the
@@ -15,9 +16,90 @@ per-call schema requires a per-candidate "reasoning" string before "picks"
 (2026-10-20, root-cause fix for empty picks — llama.cpp grammar mode forces
 the first generated token to "{" and cannot think before the JSON, unlike
 the old Ollama transport; the reasoning string is grammar-bounded
-(`maxLength` 700 — an unbounded one ran degenerate to the token cap and left
-the object unclosed, live probe 2026-10-20) and `LABELER_SELECT_MAX_TOKENS`
-is 128 → 480 so the full enumeration always fits).
+(`maxLength` 1400 = `SELECT_REASONING_MAXLEN` — 700 could not fit a
+5-candidate enumeration, ~140–173 chars per verdict item five ≈ 730+, so
+the clamp slammed shut mid-list and shipped picks contradicting the lost
+verdicts, live 2026-10-20; an unbounded one ran degenerate to the token cap
+and left the object unclosed; this pinned llama.cpp refuses GBNF repeats
+over 1000 (700 OK, 1001 FAIL, bisected max 1000), so the cap ships as two
+adjacent bounded repeats `{0,1000}` + `{0,400}` (`llm.schema_to_grammar`,
+`_GBNF_MAX_REPEAT`); verdicts are terse «подходит или не
+подходит» and a string exactly at the cap is greppable in audit as
+`reasoning_truncated`; and the echo fuel is in the prompt itself — a
+`matched` term shared by several candidates is non-discriminative and got
+echoed verbatim (2026-10-21: «Синдром «гистаминовой» головной боли» on 3 of
+5 lines → 5× echo, 23× without the grammar, ~50× think-loop to the token
+cap under the answerer template — every transport repeated it; live probes
+also killed the "use the answerer model" idea: unbounded thinking starts
+genuinely per-candidate and then spirals, 204 s, empty output), so
+`_select_user` prints the parenthetical only when the term annotates a
+single candidate) and `LABELER_SELECT_MAX_TOKENS` is 128 → 480 → 768 →
+1024 (768 sized the budget at prose density ~2.3 chars/token; a live
+degenerate short-item echo «5. 154_4 — подходит.»×N runs 1.75 — 1400
+chars ≈ 800+ tokens, and the 768 cap chopped the string at 1347 chars
+BEFORE the grammar clamp could close it, unclosed object, needless
+select_error — 2026-10-21 canary) so the full enumeration always fits —
+the wider cap costs latency (up to ~40 s per select on CPU; a full-cap
+degenerate echo ~90 s and is dropped by the loop guard), accepted for a
+laptop-only stack). What survives the prompt fix is caught post-hoc by
+the thinking-loop watchdog family (2026-10-21): `_select_reasoning_loop`
+reuses `loopguard.LoopGuard` on the parsed reasoning (verbatim
+tail-spins) plus a number-blind item-block cycle check — the same bodies
+under «1.», «2.»… break LoopGuard's back-to-back check, and the live
+shapes were a plain echo (same item x5), a cap-clamped truncated echo,
+and a full cyclic re-enumeration ([A,B,C]x4); the item tail must not end
+with >= 3 back-to-back copies of the same p-item block (p up to 8, a
+partial chopped tail block is discarded; 3 blocks, not 2 — an honest
+terse double-pick repeats one body twice). A looped reasoning judged
+nothing: its picks are dropped (`labeler_select_loop` audit row, no
+retry — invalid labeler output is never retried), the title guard is
+the deterministic net. The register's audience structure became visible
+the same day (owner catch 2026-10-21): same-NAME pairs are
+ADULT/PEDIATRIC versions (810_1 «Головная боль напряжения» = Дети,
+162_3 = Взрослые; 24 pairs, zero same-name-same-audience docs), their
+titles carry no age cue, and the blind echo had been shipping the
+CHILDREN'S guideline to adult questions unnoticed. Cards are now
+age-enriched from docs_meta `age`: the select prompt renders «(дети)» /
+«(взрослые)» / «(взрослые и дети)» markers (rule 4 finally applicable),
+the true-duplicate collapse keys on (title, audience) — merging nothing
+today, armed for future same-audience register duplicates — and the
+appendix marks pediatric picks «, дети». Selection itself became ONE
+CALL PER TITLE GROUP (owner decision 2026-10-21 evening, 27B pivoted
+away from — 4B-only on an ordinary laptop): the 4B cannot enumerate a
+5-candidate mixed list without degenerating, but judges 1-2 items
+reliably, so each recommendation title gets its own short call; the
+same-NAME adult/pediatric pair shares ONE call (owner constraint — the
+audience choice is comparative, splitting the pair would hide the
+twin). Picks are unioned, each call's picks filtered to its own group,
+and a looped group kills only its own picks (`group=[ids]` on the
+labeler_select/_loop audit rows). `frequency_penalty` on the select
+call was probed live and REJECTED (2026-10-21): it did not prevent
+loops deterministically and degraded healthy runs — a hallucinated
+candidate id in reasoning at 0.3, medically wrong synonym claims at
+0.5. Honest open state (live 3/3 with sharpened rules 3/4): per-group
+calls eliminated the loops but the 4B RUBBER-STAMPS — every candidate
+marked «подходит», детские versions included right after quoting rule
+4, unrelated docs picked with self-contradicting reasoning (live
+canary: 6 picks). Owner decisions 2026-10-21 evening: over-attachment
+is tolerated when RARE (no pick cap on the loop-canary row; the
+`expect_picks_max` check exists for rows that need it), a symptom
+query like «головная боль» MUST attach its guideline pdf, and an
+UNCLEAR audience attaches BOTH versions of a pair — the doctor chooses
+himself (`_audience_complete`: a half-picked pair with zero audience
+wording in question+answer gets the missing twin added, best-scored,
+`select_audience_complete` audit row; any «ребён/детск/взросл…»
+marker stands the guard down, rule 4 territory). With that the
+loop-canary row («А просто при головной боли?»: «ГБН» present, no
+select loop) is GREEN live. Retrieval scores are NOT sent to the
+labeler (owner asked 2026-10-21, rejected: in the live pair the TOP
+score belonged to the детские doc — score-following would amplify
+wrong-audience picks; rank is already implicit in candidate order, and
+the failures were judgment failures scores cannot encode; scores stay
+display-free, consumed by auto-pick alone). Also noted
+live: the first labeler call after ~10 min idle sometimes fails
+extract with «Сбой распознавания заболевания» (3× today, always the
+first run, always fine on rerun) — cold-start flake, not yet
+root-caused.
 After selection, a unique candidate whose guideline title contains the
 extracted disease verbatim is kept even if the selector dropped it (title
 guard, 2026-10-19, kept as a safety net — e.g. for empty-string reasoning,
@@ -287,12 +369,22 @@ Answer-file rows: `{"question", "raw_answer"}` (live labeler + search) or with
 - `python -m medassistant regression` — `tests/goldens.jsonl` against live
   endpoints: deterministic search-tier rows (disease → expected top-1
   guideline) and full-tier rows (question → whole pipeline, tolerant name
-  matching). Manual pre-ship step; full tier is minutes per question on CPU —
-  `--tier search` runs the fast deterministic rows only. Known flake source:
-  the answerer's thinking occasionally consumes the whole token budget and
-  the row fails with "empty answer twice" — rerun, and consider raising
-  `ANSWERER_MAX_TOKENS` if it repeats (thinking length varies run to run
-  even at temperature 0).
+  matching). Full-tier rows run with a throwaway audit and are RED on any
+  `labeler_select_loop` in the turn (owner decision 2026-10-21: a graceful
+  degradation — dropped picks, title-guard rescue — still means the
+  selector degenerated; the golden set demands it NOT, so a correct-picks
+  turn with a looped reasoning fails the row); the loop-canary row
+  «А просто при головной боли?» expects the ADULT «ГБН» version (rule 4)
+  and is the standing red demand for a healthy selector — it also fails
+  on a wrong-audience pick, which is how the 4B's детские pick was
+  caught. Manual pre-ship step; full tier is minutes per
+  question on CPU — `--tier search` runs the fast deterministic rows
+  only. Known flake sources: the answerer's thinking occasionally consumes
+  the whole token budget and the row fails with "empty answer twice" —
+  rerun, and consider raising `ANSWERER_MAX_TOKENS` if it repeats (thinking
+  length varies run to run even at temperature 0); rare transient
+  `select_error`/`extract_error` rows on an otherwise healthy stack are
+  the same family — rerun first, investigate on repeat.
 
 Housekeeping: `audit.jsonl` size-rotates (`AUDIT_ROTATE_MB`/`AUDIT_KEEP`,
 default 10 MB × 3); `sessions.sqlite` is WAL-checkpointed and copied to
@@ -326,6 +418,18 @@ canary`, then `python -m medassistant regression` (both live, minutes on CPU).
   dropped with a note too). A second loop or an empty retry fails with
   «Сбой генерации ответа»; audit rows: `answerer_loop_abort`,
   `stage_stop stop_stage=answerer`.
+- The same watchdog family guards labeler 2's in-JSON reasoning post-hoc
+  (2026-10-21, after live echo loops shipped blind picks): a verbatim
+  tail-spin is detected by reusing `loopguard.LoopGuard` on the complete
+  reasoning string, and a numbered echo — the same item body under «1.»,
+  «2.»… prefixes, which LoopGuard cannot see because the numbers break the
+  back-to-back run, and which survives a cap-clamped tail (the clamp chops
+  the final copy mid-word) — by a number-blind identical-item-body run
+  (`pipeline._select_reasoning_loop`, ≥3 bodies — 2 would drop an honest
+  terse double-pick). A looped reasoning judged nothing: its picks are
+  dropped, the title guard stays the deterministic net, nothing is
+  retried (invalid labeler output is never retried); audit row
+  `labeler_select_loop` (reason + dropped picks).
 - 27B tier: swap `CANDIDATE_*` in `.env`; everything else is unchanged.
 - Default browser on this machine is Yandex Browser; `start <url>` (and any
   "open in browser" action) launches it.

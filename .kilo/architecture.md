@@ -215,12 +215,17 @@ final answer = raw answer + appendix block (local PDF links only)
   whatever labeler model the tier provides).
 - Input: question + raw answer. Output: **JSON list of disease names**
   (nominative case), `[]` when neither names a disease.
-- Answer-anchored with a question fallback (owner decision 2026-10-20):
-  primarily the diseases the answer discusses; when the answer names none
-  itself (a bare «да»/«нет» confirmation), the disease comes from the
-  question — a «Да.» answer to «А при инсульте?» must still anchor the
-  stroke guideline (bare confirmations extracted `[]` before the fallback,
-  missing the disease the physician asked about).
+- Sources: question + answer, both (owner decision 2026-10-20, widening the
+  MVP answer-only anchor): answer-discussed diseases come FIRST (their
+  extraction must not lose `DISEASE_CAP=3` slots), question-named extras are
+  appended after. A «Да.» answer to «А при инсульте?» anchors the stroke
+  guideline (bare confirmations extracted `[]` before this change and the
+  guideline was missed); a drifted answer can no longer silently drop a
+  disease the physician asked about. Question-only noise stays bounded by
+  the symptom/complaint filter and the select stage (which still judges
+  candidates against the answer).
+- Earlier the same day the extraction was strictly answer-anchored with a
+  bare-answer fallback — superseded by the question+answer widening above.
 - Output is schema-constrained (structured decoding), temperature 0, small
   token budget.
 - Several diseases may be extracted; each is processed independently
@@ -262,12 +267,96 @@ final answer = raw answer + appendix block (local PDF links only)
   a `"reasoning"` string property emitted BEFORE `"picks"` (GBNF emits
   required properties in dict order): the model writes a brief per-candidate
   verdict, then decides. Chain-of-thought and guaranteed-valid JSON at once.
-  The reasoning string is grammar-bounded (`maxLength` 700 — an unbounded
-  string can absorb the whole token budget: a degenerate run repeated
-  itself to truncation and left the object unclosed, live probe 2026-10-20;
-  at the cap the grammar closes the string and the JSON still parses) and
-  `LABELER_SELECT_MAX_TOKENS` is 128 → 480 (a full 5-candidate enumeration
-  measured ~300 tokens live). The numbered-skeleton candidate tail in the
+  The reasoning string is grammar-bounded (`maxLength` 1400 via the
+  `SELECT_REASONING_MAXLEN` constant — an unbounded string can absorb the
+  whole token budget: a degenerate run repeated itself to truncation and
+  left the object unclosed, live probe 2026-10-20; and the first cap, 700,
+  could not mathematically fit a 5-candidate enumeration (~140–173 chars
+  per verdict item, five ≈ 730+): the clamp slammed shut mid-list and
+  shipped picks contradicting the lost verdicts, live 2026-10-20. At the
+  cap the grammar closes the string and the JSON still parses; `len ==`
+  the cap is greppable in audit as `reasoning_truncated`. This pinned
+  llama.cpp parser refuses GBNF repeats over 1000 (700 OK, 1001 FAIL,
+  bisected max accepted 1000, live 2026-10-20), so the cap is emitted as
+  two adjacent bounded repeats `{0,1000}` + `{0,400}` summing to it
+  (`schema_to_grammar`, `_GBNF_MAX_REPEAT`). Verdicts are
+  terse by design — «подходит или не подходит», no explanations — so a
+  real enumeration lands ~500 chars, far under the cap. The remaining
+  echo fuel was the prompt itself: a `matched` term shared by several
+  candidates is non-discriminative and the 4B echoes it verbatim
+  (2026-10-21, «Синдром «гистаминовой» головной боли» on 3 of 5 lines →
+  5× echo in the reasoning; live probes: 23× without the grammar — and
+  unparseable, ~50× as a think-loop to the token cap under the answerer
+  template with genuinely good per-candidate reasoning before the spiral,
+  204 s empty — which killed the "select via the thinking answerer" idea:
+  the repetition is prompt-fueled, not transport-fueled). `_select_user`
+  therefore prints the «совпавший термин» parenthetical only when the
+  term annotates a single candidate — unique matches keep the 2026-10-16
+  sound-alike protection, shared ones disappear from every line. The
+  register's audience structure became visible the same day (owner catch
+  2026-10-21): same-NAME pairs are ADULT/PEDIATRIC versions of the same
+  recommendation (810_1 «Головная боль напряжения» = Дети, 162_3 =
+  Взрослые; 24 such pairs, zero same-name-same-audience docs) and their
+  titles carry no age cue — the select prompt's rule 4 was inapplicable,
+  identical-looking lines fed the echo, and the blind echo shipped the
+  CHILDREN'S guideline to adult questions unnoticed. iter_appendix now
+  enriches each card with docs_meta `age`; the candidate lines render
+  «(дети)» / «(взрослые)» / «(взрослые и дети)» markers, the
+  true-duplicate collapse keys on (title, audience) — merging nothing in
+  the current register, armed for future same-audience refreshes — and
+  the appendix marks pediatric picks «, дети» (resolve_picks carries
+  `age` on the pick). The surviving degeneration is caught post-hoc by
+  the thinking-loop watchdog family (2026-10-21):
+  `_select_reasoning_loop` reuses `loopguard.LoopGuard` on the parsed
+  reasoning (verbatim tail-spins) and adds a number-blind item-block
+  cycle check — the same bodies under «1.», «2.»… break LoopGuard's
+  back-to-back check, and the live shapes were a plain echo (same item
+  x5), a cap-clamped truncated echo, and a full cyclic re-enumeration
+  ([A,B,C]x4); the item tail must not end with >= 3 back-to-back copies
+  of the same p-item block (p up to 8, a partial chopped tail block is
+  discarded; 3 blocks, not 2 — an honest terse double-pick repeats one
+  body twice). A looped reasoning judged nothing: its picks are dropped
+  (`labeler_select_loop` audit row, no retry), the title guard is the
+  deterministic net.
+  `frequency_penalty` on the select call was probed live and REJECTED
+  (2026-10-21): it did not prevent loops deterministically and degraded
+  healthy runs — a hallucinated candidate id at 0.3, medically wrong
+  synonym claims at 0.5. Selection itself became ONE CALL PER TITLE
+  GROUP (owner decision 2026-10-21 evening, 27B pivoted away from —
+  4B-only on an ordinary laptop): the 4B cannot enumerate a 5-candidate
+  mixed list without degenerating, but judges 1-2 items reliably, so
+  each recommendation title gets its own short call and the
+  same-NAME adult/pediatric pair shares ONE call (owner constraint —
+  the audience choice is comparative, splitting the pair would hide
+  the twin); picks are unioned, per-call picks filtered to the group,
+  a looped group kills only its own picks (`group=[ids]` on the audit
+  rows). Honest open state (live 3/3, sharpened rules 3/4): per-group
+  calls eliminated the loops but the 4B RUBBER-STAMPS — every
+  candidate «подходит», детские included right after quoting rule 4,
+  unrelated docs with self-contradicting reasoning (live canary:
+  6 picks). Owner decisions 2026-10-21 evening: over-attachment is
+  tolerated when RARE, a symptom query must attach its guideline pdf,
+  and an UNCLEAR audience attaches BOTH versions of a pair — the
+  doctor chooses himself (`_audience_complete` completes a half-picked
+  pair when question+answer carry zero audience wording, best-scored
+  twin, `select_audience_complete` audit row; any «ребён/детск/
+  взросл…» marker stands the guard down — rule 4 territory). With that
+  the loop-canary row («ГБН» present, no select loop) is GREEN live.
+  Retrieval scores are NOT sent to the labeler (owner asked,
+  rejected: the live pair's TOP score belonged to the детские doc —
+  score-following would amplify wrong-audience picks; rank is already
+  implicit in candidate order; the failures were judgment failures
+  scores cannot encode) and
+  `LABELER_SELECT_MAX_TOKENS` is 128 → 480 → 768 → 1024 (768 assumed
+  prose density ~2.3 chars/token; a live degenerate short-item echo
+  «5. 154_4 — подходит.»×N runs 1.75 chars/token — 1400 chars ≈ 800+
+  tokens and the 768 cap chopped the string at 1347 chars before the
+  grammar clamp could close it, unclosed object, needless select_error
+  (2026-10-21 canary); 1024 keeps the char clamp authoritative; only
+  degenerate runs pay the full cap, healthy enumerations stop early.
+  Select latency grows to ~40 s worst case on CPU (~90 s for a full-cap
+  echo, dropped by the loop guard) — accepted, laptop-only stack). The numbered-skeleton
+  candidate tail in the
   user prompt is load-bearing (probed live: instruction-only tails reasoned
   right but still emitted `picks: []`; prose example values echoed verbatim).
   The parser stays lenient — picks-only output still parses
