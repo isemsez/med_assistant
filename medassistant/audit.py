@@ -21,6 +21,11 @@ from . import config
 
 TS_FMT = "%Y/%m/%d-%H:%M:%S"
 
+# turn-start records get a blank line before them so separate turns are
+# visually distinct when the file is read by eye; stats.read_records already
+# skips blank lines (owner request 2026-10-21)
+SEPARATED_STAGES = frozenset({"question"})
+
 
 def utc_ts():
     """One timestamp format across audit/store/health — Moscow local wall
@@ -67,6 +72,8 @@ class Audit:
                 except OSError:
                     pass  # rotation is best-effort; appending must never fail
             with self.path.open("a", encoding="utf-8") as f:
+                if stage in SEPARATED_STAGES:
+                    f.write("\n")
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 f.flush()
                 os.fsync(f.fileno())

@@ -412,7 +412,7 @@ class TestStop(Base):
         r, _ = self._stop(sid)
         self.assertEqual(r.json()["stopped"], 1)
         recs = [json.loads(l) for l in (TMP / "audit.jsonl")
-                .read_text(encoding="utf-8").splitlines()]
+                .read_text(encoding="utf-8").splitlines() if l.strip()]
         stops = [r for r in recs if r["stage"] == "user_stop"
                  and r.get("session_id") == sid]
         self.assertEqual(len(stops), 1)
@@ -576,7 +576,7 @@ class TestCards(Base):
         sid, r = self._post_card("ghost.амбулаторная_карта.md", session_id=sid)
         self.assertEqual(r.status_code, 400)
         recs = [json.loads(l) for l in (TMP / "audit.jsonl")
-                .read_text(encoding="utf-8").splitlines()]
+                .read_text(encoding="utf-8").splitlines() if l.strip()]
         used = [r for r in recs if r["stage"] == "card_used"]
         self.assertGreaterEqual(len(used), 1)  # the file is shared across tests
         self.assertEqual(used[-1]["file"], CARD_FILE)

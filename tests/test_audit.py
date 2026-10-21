@@ -1,4 +1,5 @@
 import datetime
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -88,10 +89,34 @@ class TestRotation(unittest.TestCase):
                 t.join()
             self.assertEqual(errs, [])
             lines = p.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(len(lines), 200)
+            # 200 records + a blank separator before each «question» record
+            self.assertEqual(len(lines), 400)
             import json as _json
             for ln in lines:
-                self.assertTrue(_json.loads(ln)["q"])
+                if ln.strip():
+                    self.assertTrue(_json.loads(ln)["q"])
+
+
+class TestTurnSeparation(unittest.TestCase):
+    def test_question_record_preceded_by_blank_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "audit.jsonl"
+            a = Audit(p, max_bytes=1_000_000, keep=3)
+            a.log("question", question="q1")
+            a.log("raw_answer", answer="a1")
+            a.log("question", question="q2")
+            lines = p.read_text(encoding="utf-8").splitlines()
+            recs = [(i, json.loads(ln)) for i, ln in enumerate(lines)
+                    if ln.strip()]
+            self.assertEqual([r["stage"] for _, r in recs],
+                             ["question", "raw_answer", "question"])
+            for i, r in recs:
+                if r["stage"] == "question":
+                    self.assertEqual(lines[i - 1], "",
+                                     "blank line must precede «question»")
+                else:
+                    self.assertNotEqual(lines[i - 1], "",
+                                        "only «question» gets a separator")
 
 
 if __name__ == "__main__":
