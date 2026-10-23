@@ -36,13 +36,15 @@ if (-not $ZipDir) { $ZipDir = $RepoRoot }
 $ZipPath = Join-Path $ZipDir $ZipName
 
 Write-Host "Repo root : $RepoRoot"
-Write-Host "Staging   : $StagingApp"
 Write-Host "Zip target: $ZipPath"
+Write-Host ""
+Write-Host "Staging   : $StagingApp"
 
 if (Test-Path -LiteralPath $StagingRoot) {
     Write-Host "Cleaning previous staging..."
     Remove-Item -LiteralPath $StagingRoot -Recurse -Force
 }
+Write-Host ""
 New-Item -ItemType Directory -Force -Path $StagingApp | Out-Null
 
 # --- data\ whitelist guard (owner decision 2026-10-18) -----------------------
@@ -146,7 +148,11 @@ if (Test-Path -LiteralPath $SitePackagesSrc) {
 $ScriptsSrc = Join-Path $PySrc 'Scripts'
 if (Test-Path -LiteralPath $ScriptsSrc) { $XdExclude.Add($ScriptsSrc) }
 
-robocopy $PySrc $PyDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP /XD $XdExclude /XF '*.pyc' '*.pyo'
+# robocopy still emits one stray blank line when fully silenced (/NP /NFL /NDL
+# /NJH /NJS) — capture and print only non-blank lines, so the log has no gaps
+# while real error text (robocopy reports errors on stdout) stays visible.
+$RcOut = robocopy $PySrc $PyDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP /XD $XdExclude /XF '*.pyc' '*.pyo'
+$RcOut | Where-Object { $_ -match '\S' } | Write-Host
 if ($LASTEXITCODE -ge 8) { throw "robocopy python\ failed: exit code $LASTEXITCODE" }
 $global:LASTEXITCODE = 0
 
@@ -160,7 +166,8 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'hide_coding_dirs.bat') `
 # --- staging: engine\ (llama-server + dlls) ----------------------------------
 Write-Host "Copying engine\ ..."
 $EngDst = Join-Path $StagingApp 'engine'
-robocopy $EngSrc $EngDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP /XF 'STAMP.txt'
+$RcOut = robocopy $EngSrc $EngDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP /XF 'STAMP.txt'
+$RcOut | Where-Object { $_ -match '\S' } | Write-Host
 if ($LASTEXITCODE -ge 8) { throw "robocopy engine\ failed: exit code $LASTEXITCODE" }
 $global:LASTEXITCODE = 0
 
@@ -191,7 +198,8 @@ New-Item -ItemType Directory -Force -Path $ServerDst | Out-Null
 Copy-Item -LiteralPath (Join-Path $AppSrc 'server\__init__.py') -Destination $ServerDst -Force
 $StaticDst = Join-Path $AppDst 'server\static'
 New-Item -ItemType Directory -Force -Path $StaticDst | Out-Null
-robocopy (Join-Path $AppSrc 'server\static') $StaticDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP
+$RcOut = robocopy (Join-Path $AppSrc 'server\static') $StaticDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP
+$RcOut | Where-Object { $_ -match '\S' } | Write-Host
 if ($LASTEXITCODE -ge 8) { throw "robocopy server\static failed: exit code $LASTEXITCODE" }
 $global:LASTEXITCODE = 0
 
@@ -206,7 +214,8 @@ foreach ($w in $DataWhitelist) {
         throw "whitelisted data entry missing: data\$w"
     }
     if ((Get-Item -LiteralPath $src).PSIsContainer) {
-        robocopy $src $dst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP
+        $RcOut = robocopy $src $dst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP
+        $RcOut | Where-Object { $_ -match '\S' } | Write-Host
         if ($LASTEXITCODE -ge 8) { throw "robocopy data\$w failed: exit code $LASTEXITCODE" }
         $global:LASTEXITCODE = 0
     } else {
@@ -244,6 +253,7 @@ $Manifest | ConvertTo-Json -Depth 10 |
 # logs\ is a runtime artifact and cannot be staged). archivers that restore
 # attributes from the zip flag these directly; Explorer extracts rely on
 # launcher\hide_coding_dirs.bat, invoked by Start.bat on every run.
+Write-Host ""
 Write-Host "Marking internals Hidden on staging..."
 $HideDirs = @('python', 'engine', 'medassistant', 'data', 'launcher', 'models')
 $HideFiles = @('.env', 'dist-manifest.json')
@@ -257,7 +267,7 @@ foreach ($f in $HideFiles) {
 }
 
 # --- create UTF-8 zip, top folder med_assistant\ ------------------------------
-Write-Host "Creating zip (UTF-8, top folder med_assistant\, compression $CompressionLevel)..."
+Write-Host "Creating zip (UTF-8, top folder `"med_assistant`", compression $CompressionLevel)..."
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
 $ZipSw = [System.Diagnostics.Stopwatch]::StartNew()
