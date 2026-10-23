@@ -146,7 +146,7 @@ if (Test-Path -LiteralPath $SitePackagesSrc) {
 $ScriptsSrc = Join-Path $PySrc 'Scripts'
 if (Test-Path -LiteralPath $ScriptsSrc) { $XdExclude.Add($ScriptsSrc) }
 
-robocopy $PySrc $PyDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /XD $XdExclude /XF '*.pyc' '*.pyo'
+robocopy $PySrc $PyDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP /XD $XdExclude /XF '*.pyc' '*.pyo'
 if ($LASTEXITCODE -ge 8) { throw "robocopy python\ failed: exit code $LASTEXITCODE" }
 $global:LASTEXITCODE = 0
 
@@ -160,7 +160,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'hide_coding_dirs.bat') `
 # --- staging: engine\ (llama-server + dlls) ----------------------------------
 Write-Host "Copying engine\ ..."
 $EngDst = Join-Path $StagingApp 'engine'
-robocopy $EngSrc $EngDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /XF 'STAMP.txt'
+robocopy $EngSrc $EngDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP /XF 'STAMP.txt'
 if ($LASTEXITCODE -ge 8) { throw "robocopy engine\ failed: exit code $LASTEXITCODE" }
 $global:LASTEXITCODE = 0
 
@@ -191,7 +191,7 @@ New-Item -ItemType Directory -Force -Path $ServerDst | Out-Null
 Copy-Item -LiteralPath (Join-Path $AppSrc 'server\__init__.py') -Destination $ServerDst -Force
 $StaticDst = Join-Path $AppDst 'server\static'
 New-Item -ItemType Directory -Force -Path $StaticDst | Out-Null
-robocopy (Join-Path $AppSrc 'server\static') $StaticDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS
+robocopy (Join-Path $AppSrc 'server\static') $StaticDst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy server\static failed: exit code $LASTEXITCODE" }
 $global:LASTEXITCODE = 0
 
@@ -206,7 +206,7 @@ foreach ($w in $DataWhitelist) {
         throw "whitelisted data entry missing: data\$w"
     }
     if ((Get-Item -LiteralPath $src).PSIsContainer) {
-        robocopy $src $dst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS
+        robocopy $src $dst /E /R:1 /W:1 /MT:16 /NFL /NDL /NJH /NJS /NP
         if ($LASTEXITCODE -ge 8) { throw "robocopy data\$w failed: exit code $LASTEXITCODE" }
         $global:LASTEXITCODE = 0
     } else {
