@@ -211,7 +211,28 @@ final answer = raw answer + appendix block (local PDF links only)
   `LOOP_TAIL_CHARS` (default 2000) chars of the looped thinking, so the
   degenerate content survives for analysis (2026-10-24: before, only the
   80-char unit snippet inside `error` survived; `LoopGuard.tail` had
-  been dead code).
+  been dead code). Also 2026-10-24: the retry now sends per-request
+  `dry_*` sampler params through `chat_stream` (`LOOP_RETRY_DRY_*`,
+  defaults 0.8/1.75/2/64/␞, `pipeline._retry_dry` reads config at call
+  time so patched-config tests work, multiplier 0 = off), because the
+  frequency_penalty retry still looped live 2026-10-21 20:49 (fatal
+  turn). DRY (arXiv 2608.22761, live-verified per-request on the
+  pinned b11724 build) penalizes a token for *extending* an
+  already-seen sequence — the verbatim echo shape — as a pure logit
+  adjustment, so it works at temperature 0 and the determinism
+  doctrine stays intact. Two footguns handled: the sequence breakers
+  are overridden with the never-emitted U+241E (llama.cpp's default
+  breakers `\n : " *` reset matching inside loop units containing
+  those characters), and the penalty window stays shallow
+  (`dry_penalty_last_n` 64, matching the engine's always-on
+  `repeat_last_n`) so the penalty never reaches the patient card or
+  prompt — verbatim quoting survives. The attempt-0 payload stays
+  byte-identical (test-pinned: DRY rides the retry only); the labeler
+  select path is deliberately untouched — it is quoting-centric, a DRY
+  window over the prompt would penalize title quoting, per-group calls
+  already killed select loops, and the 2026-10-21 owner rejection
+  stands there. The `answerer_loop_abort` audit row carries `retry_dry`
+  (the multiplier actually armed for the retry).
 
 ### [2] Labeler — extraction call
 

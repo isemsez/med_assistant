@@ -102,6 +102,14 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertEqual(config.LOOP_WINDOW_CHARS, 4096)
         self.assertEqual(config.LOOP_RETRIES, 1)
         self.assertEqual(config.LOOP_RETRY_FREQ_PENALTY, 0.5)
+        # loop-retry DRY sampler (2026-10-24): llama.cpp per-request dry_*,
+        # breaker default U+241E (never emitted — the \n : " * defaults
+        # reset matching inside loop units containing those chars)
+        self.assertEqual(config.LOOP_RETRY_DRY_MULTIPLIER, 0.8)
+        self.assertEqual(config.LOOP_RETRY_DRY_BASE, 1.75)
+        self.assertEqual(config.LOOP_RETRY_DRY_ALLOWED_LENGTH, 2)
+        self.assertEqual(config.LOOP_RETRY_DRY_PENALTY_LAST_N, 64)
+        self.assertEqual(config.LOOP_RETRY_DRY_BREAKERS, "\u241e")
         self.assertEqual(config.LOOP_TAIL_CHARS, 2000)
 
 

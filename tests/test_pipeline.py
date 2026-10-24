@@ -1293,21 +1293,38 @@ class TestStreamAnswerLoopRetry(unittest.TestCase):
     def setUp(self):
         from medassistant import config
         self.config = config
-        self._orig = (config.LOOP_RETRIES, config.LOOP_RETRY_FREQ_PENALTY)
-        config.LOOP_RETRIES, config.LOOP_RETRY_FREQ_PENALTY = 1, 0.5
+        self._orig = (config.LOOP_RETRIES, config.LOOP_RETRY_FREQ_PENALTY,
+                      config.LOOP_RETRY_DRY_MULTIPLIER,
+                      config.LOOP_RETRY_DRY_BASE,
+                      config.LOOP_RETRY_DRY_ALLOWED_LENGTH,
+                      config.LOOP_RETRY_DRY_PENALTY_LAST_N,
+                      config.LOOP_RETRY_DRY_BREAKERS)
+        (config.LOOP_RETRIES, config.LOOP_RETRY_FREQ_PENALTY,
+         config.LOOP_RETRY_DRY_MULTIPLIER, config.LOOP_RETRY_DRY_BASE,
+         config.LOOP_RETRY_DRY_ALLOWED_LENGTH,
+         config.LOOP_RETRY_DRY_PENALTY_LAST_N,
+         config.LOOP_RETRY_DRY_BREAKERS) = 1, 0.5, 0.8, 1.75, 2, 64, "\u241e"
         self._orig_stream = llm.chat_stream
         self.calls = []
+        self.dry_calls = []
 
     def tearDown(self):
-        self.config.LOOP_RETRIES, self.config.LOOP_RETRY_FREQ_PENALTY = self._orig
+        (self.config.LOOP_RETRIES, self.config.LOOP_RETRY_FREQ_PENALTY,
+         self.config.LOOP_RETRY_DRY_MULTIPLIER,
+         self.config.LOOP_RETRY_DRY_BASE,
+         self.config.LOOP_RETRY_DRY_ALLOWED_LENGTH,
+         self.config.LOOP_RETRY_DRY_PENALTY_LAST_N,
+         self.config.LOOP_RETRY_DRY_BREAKERS) = self._orig
         llm.chat_stream = self._orig_stream
 
     def _fake_chat_stream(self, plans):
         """plans: list of per-attempt behaviors — event list or exception."""
         seq = list(plans)
 
-        def fake(endpoint, messages, max_tokens=None, freq_penalty=None, **kw):
+        def fake(endpoint, messages, max_tokens=None, freq_penalty=None,
+                 dry=None, **kw):
             self.calls.append(freq_penalty)
+            self.dry_calls.append(dry)
             plan = seq.pop(0)
             if isinstance(plan, Exception):
                 raise plan
@@ -1331,6 +1348,29 @@ class TestStreamAnswerLoopRetry(unittest.TestCase):
             {"type": "content", "text": "Ответ."},
         ])
         self.assertEqual(self.calls, [None, 0.5])
+
+    def test_retry_sends_dry_from_config(self):
+        # 2026-10-24: the loop-retry attempt carries per-request dry_* built
+        # from config at call time (patched knobs honored); attempt-0
+        # receives None — its payload stays byte-identical
+        expected = {"dry_multiplier": 0.8, "dry_base": 1.75,
+                    "dry_allowed_length": 2, "dry_penalty_last_n": 64,
+                    "dry_sequence_breakers": ["\u241e"]}
+        self._fake_chat_stream([
+            llm.LLMLoopError("degenerate reasoning loop"),
+            [{"type": "content", "text": "Ответ."}],
+        ])
+        list(self._pipe().stream_answer(Q))
+        self.assertEqual(self.dry_calls, [None, expected])
+
+    def test_retry_dry_disabled_by_zero_multiplier(self):
+        self.config.LOOP_RETRY_DRY_MULTIPLIER = 0
+        self._fake_chat_stream([
+            llm.LLMLoopError("loop 1"),
+            [{"type": "content", "text": "Ответ."}],
+        ])
+        list(self._pipe().stream_answer(Q))
+        self.assertEqual(self.dry_calls, [None, None])
 
     def test_second_loop_raises(self):
         self._fake_chat_stream([
@@ -1362,6 +1402,7 @@ class TestStreamAnswerLoopRetry(unittest.TestCase):
                     .splitlines()]
         self.assertEqual([r["stage"] for r in recs], ["answerer_loop_abort"])
         self.assertEqual(recs[0]["attempt"], 1)
+        self.assertEqual(recs[0]["retry_dry"], 0.8)
 
     def test_audit_abort_row_carries_tail(self):
         # 2026-10-24: the looped thinking survives in the audit row — the

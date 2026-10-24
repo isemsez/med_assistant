@@ -421,7 +421,26 @@ canary`, then `python -m medassistant regression` (both live, minutes on CPU).
   `LOOP_TAIL_CHARS` (default 2000) chars of the looped thinking
   (2026-10-24: before, only the 80-char unit snippet inside `error`
   survived and the content was unrecoverable; `LoopGuard.tail` had been
-  dead code).
+  dead code). The retry now ALSO sends per-request `dry_*` sampler
+  params via `chat_stream` (2026-10-24, knobs `LOOP_RETRY_DRY_*`,
+  defaults 0.8/1.75/2/64/␞, `pipeline._retry_dry` reads config at call
+  time, 0 = off): frequency_penalty alone still looped live
+  2026-10-21 20:49 (fatal turn), while llama.cpp's DRY sampler
+  (arXiv 2608.22761, live-verified per-request on the pinned b11724)
+  penalizes a token for EXTENDING an already-seen sequence — the
+  verbatim echo shape — as a logit adjustment, so it works at temp 0
+  (determinism doctrine intact). The sequence breakers are overridden
+  with never-emitted U+241E because llama.cpp's defaults (\n : " *)
+  reset matching inside loop units containing those chars; the window
+  stays shallow (`dry_penalty_last_n` 64, matching the engine's
+  always-on repeat_last_n) so the penalty never reaches the patient
+  card / prompt (verbatim quoting survives). The attempt-0 payload is
+  byte-identical (test-pinned); the labeler select path is
+  deliberately untouched — it is quoting-centric, a DRY window over
+  the prompt would penalize title quoting, per-group calls already
+  killed select loops, and the 2026-10-21 owner rejection stands
+  there. The `answerer_loop_abort` row carries `retry_dry` (the
+  multiplier actually armed for the retry).
 - The same watchdog family guards labeler 2's in-JSON reasoning post-hoc
   (2026-10-21, after live echo loops shipped blind picks): a verbatim
   tail-spin is detected by reusing `loopguard.LoopGuard` on the complete

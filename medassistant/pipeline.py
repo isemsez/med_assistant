@@ -197,6 +197,19 @@ def _select_reasoning_loop(reasoning):
     return None
 
 
+def _retry_dry():
+    """Per-request DRY sampler params for the loop-retry attempt (None = off)."""
+    if config.LOOP_RETRY_DRY_MULTIPLIER <= 0:
+        return None
+    d = {"dry_multiplier": config.LOOP_RETRY_DRY_MULTIPLIER,
+         "dry_base": config.LOOP_RETRY_DRY_BASE,
+         "dry_allowed_length": config.LOOP_RETRY_DRY_ALLOWED_LENGTH,
+         "dry_penalty_last_n": config.LOOP_RETRY_DRY_PENALTY_LAST_N}
+    if config.LOOP_RETRY_DRY_BREAKERS:
+        d["dry_sequence_breakers"] = [config.LOOP_RETRY_DRY_BREAKERS]
+    return d
+
+
 class Pipeline:
     def __init__(self, docs=None, index=None, abbr_map=None, audit=None,
                  candidate=None, labeler=None, embed=None,
@@ -259,6 +272,7 @@ class Pipeline:
                     max_tokens=max_tokens or config.ANSWERER_MAX_TOKENS,
                     freq_penalty=(config.LOOP_RETRY_FREQ_PENALTY
                                   if attempt else None),
+                    dry=(_retry_dry() if attempt else None),
                     cancel=cancel)
                 return
             except llm.LLMLoopError as e:
@@ -267,7 +281,8 @@ class Pipeline:
                 if self.audit:
                     self.audit.log("answerer_loop_abort",
                                    attempt=attempt + 1, error=str(e),
-                                   tail=getattr(e, "tail", None))
+                                   tail=getattr(e, "tail", None),
+                                   retry_dry=config.LOOP_RETRY_DRY_MULTIPLIER)
                 yield {"type": "reasoning_reset"}
 
     def answer(self, question, history=None, max_tokens=None, card=None,

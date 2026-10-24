@@ -124,6 +124,17 @@ LOOP_REPEATS = int(os.environ.get("LOOP_REPEATS", "3"))
 LOOP_WINDOW_CHARS = int(os.environ.get("LOOP_WINDOW_CHARS", "4096"))
 LOOP_RETRIES = int(os.environ.get("LOOP_RETRIES", "1"))
 LOOP_RETRY_FREQ_PENALTY = float(os.environ.get("LOOP_RETRY_FREQ_PENALTY", "0.5"))
+# DRY sampling sent on the loop-retry attempt (2026-10-24): frequency_penalty
+# alone failed live (2026-10-21 20:49 retry still looped, fatal turn). DRY
+# penalizes a token for EXTENDING a previously seen sequence — the verbatim
+# echo shape — and works at temp 0 (logit adjustment, not sampling). Breakers
+# default to U+241E (never emitted): llama.cpp's default breakers \n : " *
+# reset matching inside loop units containing those chars.
+LOOP_RETRY_DRY_MULTIPLIER = float(os.environ.get("LOOP_RETRY_DRY_MULTIPLIER", "0.8"))
+LOOP_RETRY_DRY_BASE = float(os.environ.get("LOOP_RETRY_DRY_BASE", "1.75"))
+LOOP_RETRY_DRY_ALLOWED_LENGTH = int(os.environ.get("LOOP_RETRY_DRY_ALLOWED_LENGTH", "2"))
+LOOP_RETRY_DRY_PENALTY_LAST_N = int(os.environ.get("LOOP_RETRY_DRY_PENALTY_LAST_N", "64"))
+LOOP_RETRY_DRY_BREAKERS = os.environ.get("LOOP_RETRY_DRY_BREAKERS", "\u241e")
 # Chars of looped thinking the guard keeps for the audit rows' `tail`
 # field (2026-10-24): before, only the 80-char unit snippet inside
 # `error` survived and the content was unrecoverable (LoopGuard.tail had

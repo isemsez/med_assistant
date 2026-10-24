@@ -357,6 +357,31 @@ class TestChatStream(unittest.TestCase):
         self.assertNotIn("frequency_penalty",
                          json.loads(self.last_kw["content"]))
 
+    def test_dry_in_payload_and_overrides_extra_body(self):
+        # 2026-10-24: the loop-retry dry_* dict lands in the payload and
+        # overrides any same-named extra_body key (retry nudge semantics)
+        dry = {"dry_multiplier": 0.8, "dry_base": 1.75,
+               "dry_allowed_length": 2, "dry_penalty_last_n": 64,
+               "dry_sequence_breakers": ["\u241e"]}
+        self._patch(["data: [DONE]"])
+        list(llm.chat_stream(self.EP, [], dry=dry))
+        self.assertEqual(json.loads(self.last_kw["content"]), {
+            "model": "m", "messages": [], "temperature": 0.0,
+            "max_tokens": 2048, "stream": True, **dry})
+        ep = {**self.EP, "extra_body": {"dry_multiplier": 0.0}}
+        self._patch(["data: [DONE]"])
+        list(llm.chat_stream(ep, [], dry=dry))
+        self.assertEqual(
+            json.loads(self.last_kw["content"])["dry_multiplier"], 0.8)
+
+    def test_no_dry_by_default(self):
+        # attempt-0 payload stays byte-identical: dry=None puts zero dry_*
+        # keys in the payload
+        self._patch(["data: [DONE]"])
+        list(llm.chat_stream(self.EP, []))
+        payload = json.loads(self.last_kw["content"])
+        self.assertFalse([k for k in payload if k.startswith("dry_")])
+
 
 class _SSEServer:
     """Minimal real HTTP/SSE server on 127.0.0.1 for the cancel tests: sends

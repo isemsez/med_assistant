@@ -253,7 +253,8 @@ def chat(endpoint, messages, temperature=0.0, max_tokens=2048,
 
 
 def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
-                timeout=600, attempts=4, freq_penalty=None, cancel=None):
+                timeout=600, attempts=4, freq_penalty=None, dry=None,
+                cancel=None):
     """Streaming completion -> generator of typed events:
     {"type": "reasoning", "text": ...} (thinking models) and
     {"type": "content", "text": ...}.
@@ -266,6 +267,9 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
     the request with LLMLoopError (retrying mid-content would duplicate
     streamed text — only the reasoning phase is guarded). `freq_penalty`
     adds an anti-repetition nudge for the retry attempt (answerer only).
+    `dry` (dict, 2026-10-24) updates per-request dry_* sampler params into
+    the payload — the loop-retry nudge for the answerer, same override
+    semantics as freq_penalty.
 
     `cancel` (StreamCancel, owner decision 2026-10-15) aborts the request
     with LLMCancelled: set() drops the connection (so a reader blocked in
@@ -278,6 +282,8 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
     payload = _payload(endpoint, **kw)
     if freq_penalty is not None:  # retry nudge overrides extra_body
         payload["frequency_penalty"] = freq_penalty
+    if dry:  # retry nudge overrides extra_body, same as freq_penalty
+        payload.update(dry)
     body = json.dumps(payload, ensure_ascii=False)
     guard = LoopGuard(min_unit=config.LOOP_MIN_UNIT,
                       repeats=config.LOOP_REPEATS,
