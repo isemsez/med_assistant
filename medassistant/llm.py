@@ -114,7 +114,14 @@ class LLMError(RuntimeError):
 class LLMLoopError(LLMError):
     """Degenerate repetition in pre-content reasoning — the watchdog
     aborted the stream (owner decision 2026-10-06). Raising out of the
-    httpx.stream context closes the connection and cancels generation."""
+    httpx.stream context closes the connection and cancels generation.
+    `tail` carries the last LOOP_TAIL_CHARS chars of the looped reasoning
+    (2026-10-24) so the audit rows keep the content; the raise site in
+    chat_stream is its only producer."""
+
+    def __init__(self, message, tail=None):
+        super().__init__(message)
+        self.tail = tail
 
 
 class LLMCancelled(LLMError):
@@ -274,7 +281,8 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
     body = json.dumps(payload, ensure_ascii=False)
     guard = LoopGuard(min_unit=config.LOOP_MIN_UNIT,
                       repeats=config.LOOP_REPEATS,
-                      window_chars=config.LOOP_WINDOW_CHARS) \
+                      window_chars=config.LOOP_WINDOW_CHARS,
+                      tail_chars=config.LOOP_TAIL_CHARS) \
         if config.LOOP_GUARD else None
     last = None
     saw_content = False
@@ -311,7 +319,8 @@ def chat_stream(endpoint, messages, temperature=0.0, max_tokens=2048,
                                     reason = guard.feed(reasoning)
                                     if reason:
                                         raise LLMLoopError(
-                                            f"degenerate reasoning loop: {reason}")
+                                            f"degenerate reasoning loop: {reason}",
+                                            tail=guard.tail)
                                 got_event = True
                                 yield {"type": "reasoning", "text": reasoning}
                             content = delta.get("content")

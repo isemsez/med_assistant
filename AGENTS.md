@@ -417,7 +417,11 @@ canary`, then `python -m medassistant regression` (both live, minutes on CPU).
   «Зацикливание размышлений — …» note; a fatal second loop's garbage is
   dropped with a note too). A second loop or an empty retry fails with
   «Сбой генерации ответа»; audit rows: `answerer_loop_abort`,
-  `stage_stop stop_stage=answerer`.
+  `stage_stop stop_stage=answerer` — both also carry `tail`, the last
+  `LOOP_TAIL_CHARS` (default 2000) chars of the looped thinking
+  (2026-10-24: before, only the 80-char unit snippet inside `error`
+  survived and the content was unrecoverable; `LoopGuard.tail` had been
+  dead code).
 - The same watchdog family guards labeler 2's in-JSON reasoning post-hoc
   (2026-10-21, after live echo loops shipped blind picks): a verbatim
   tail-spin is detected by reusing `loopguard.LoopGuard` on the complete

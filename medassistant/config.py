@@ -124,6 +124,11 @@ LOOP_REPEATS = int(os.environ.get("LOOP_REPEATS", "3"))
 LOOP_WINDOW_CHARS = int(os.environ.get("LOOP_WINDOW_CHARS", "4096"))
 LOOP_RETRIES = int(os.environ.get("LOOP_RETRIES", "1"))
 LOOP_RETRY_FREQ_PENALTY = float(os.environ.get("LOOP_RETRY_FREQ_PENALTY", "0.5"))
+# Chars of looped thinking the guard keeps for the audit rows' `tail`
+# field (2026-10-24): before, only the 80-char unit snippet inside
+# `error` survived and the content was unrecoverable (LoopGuard.tail had
+# been dead code).
+LOOP_TAIL_CHARS = int(os.environ.get("LOOP_TAIL_CHARS", "2000"))
 
 
 def _endpoint(prefix):

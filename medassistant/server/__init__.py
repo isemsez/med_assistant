@@ -382,7 +382,7 @@ def chat(req: ChatRequest):
             except llm.LLMError as e:
                 failed = True
                 aud.log("stage_stop", stop_stage="answerer", session_id=sid,
-                        error=str(e))
+                        error=str(e), tail=getattr(e, "tail", None))
                 if isinstance(e, llm.LLMLoopError):
                     # the retry looped again — drop the looped garbage and say
                     # why the thinking block is empty before the honest failure

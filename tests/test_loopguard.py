@@ -76,6 +76,23 @@ class TestLoopGuard(unittest.TestCase):
         self.guard.feed("abc")
         self.assertEqual(self.guard.tail, "abc")
 
+    def test_tail_keeps_last_n_chars_fed(self):
+        # 2026-10-24: the audit `tail` field must survive the whole looped
+        # thinking up to tail_chars — the last chars fed, not a snippet
+        guard = LoopGuard(min_unit=8, repeats=3, window_chars=4096,
+                          tail_chars=50)
+        guard.feed("A" * 30)
+        guard.feed("B" * 30)
+        self.assertEqual(guard.tail, "A" * 20 + "B" * 30)
+
+    def test_tail_resets_with_the_guard(self):
+        # llm.chat_stream builds a fresh guard per attempt: a retry's tail
+        # must not carry attempt 1's looped text
+        self.guard.feed(LOOP_PHRASE * 8)
+        self.assertEqual(self.guard.tail, (LOOP_PHRASE * 8)[-2000:])
+        fresh = LoopGuard(min_unit=8, repeats=3, window_chars=4096)
+        self.assertEqual(fresh.tail, "")
+
 
 class TestConfigDefaults(unittest.TestCase):
     def test_defaults(self):
@@ -85,6 +102,7 @@ class TestConfigDefaults(unittest.TestCase):
         self.assertEqual(config.LOOP_WINDOW_CHARS, 4096)
         self.assertEqual(config.LOOP_RETRIES, 1)
         self.assertEqual(config.LOOP_RETRY_FREQ_PENALTY, 0.5)
+        self.assertEqual(config.LOOP_TAIL_CHARS, 2000)
 
 
 if __name__ == "__main__":

@@ -186,7 +186,8 @@ def cmd_ask(args):
                 print(event["text"], end="", flush=True)
         print()
     except llm.LLMError as e:
-        aud.log("stage_stop", stop_stage="answerer", session_id=session_id, error=str(e))
+        aud.log("stage_stop", stop_stage="answerer", session_id=session_id,
+                error=str(e), tail=getattr(e, "tail", None))
         print(f"\n[сбой ответа] {e}", file=sys.stderr)
         raise SystemExit(1)
     raw_answer = "".join(parts)

@@ -298,6 +298,27 @@ class TestChatStream(unittest.TestCase):
                 events.append(ev)
         self.assertTrue(events)  # some reasoning streamed before the trip
 
+    def test_loop_error_carries_reasoning_tail(self):
+        # 2026-10-24: the audit rows keep the looped thinking via e.tail —
+        # the raise site is its only producer. The tail is everything fed
+        # to the guard: the streamed reasoning plus the delta that tripped
+        # (feed runs before the yield, so the tripping delta never streams)
+        from medassistant import config
+        self._patch(self._loop_lines())
+        events = []
+        with self.assertRaises(llm.LLMLoopError) as cm:
+            for ev in llm.chat_stream(self.EP, []):
+                events.append(ev)
+        streamed = "".join(e["text"] for e in events
+                           if e["type"] == "reasoning")
+        phrase = "негиперпигментационные, негиперкератотические, "
+        self.assertEqual(cm.exception.tail, streamed + phrase)
+        self.assertIn("негиперпигментационные", cm.exception.tail)
+        # str(e) is unchanged — the reason string stays the row's `error`
+        self.assertTrue(str(cm.exception).startswith(
+            "degenerate reasoning loop: unit x"))
+        self.assertTrue(config.LOOP_TAIL_CHARS >= len(cm.exception.tail))
+
     def test_no_abort_after_content(self):
         # a loop after the first answer token must not abort the stream
         lines = ['data: {"choices":[{"delta":{"content":"Ответ"}}]}']

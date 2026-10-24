@@ -27,11 +27,13 @@ class LoopGuard:
     fits `repeats` whole copies inside a rolling `window_chars` buffer).
     Occurrences separated by other text never trip."""
 
-    def __init__(self, min_unit=8, repeats=3, window_chars=4096):
+    def __init__(self, min_unit=8, repeats=3, window_chars=4096, tail_chars=2000):
         self.min_unit = min_unit
         self.repeats = repeats
         self.window_chars = window_chars
+        self.tail_chars = tail_chars
         self._buf = ""
+        self._tail = ""
 
     def feed(self, text):
         """Append reasoning text; return a short reason when a
@@ -39,6 +41,7 @@ class LoopGuard:
         if not text:
             return None
         self._buf = (self._buf + text)[-self.window_chars:]
+        self._tail = (self._tail + text)[-self.tail_chars:]
         run = self._tail_run()
         if run is None:
             return None
@@ -66,5 +69,8 @@ class LoopGuard:
 
     @property
     def tail(self):
-        """Last chars seen (audit samples)."""
-        return self._buf[-80:]
+        """Last `tail_chars` chars of everything fed — the looped thinking
+        survives whole for the audit `tail` field (2026-10-24; had been
+        dead code before). Bounded independently of `window_chars`, so a
+        wider tail than the detection window still works."""
+        return self._tail

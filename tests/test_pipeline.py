@@ -1363,6 +1363,27 @@ class TestStreamAnswerLoopRetry(unittest.TestCase):
         self.assertEqual([r["stage"] for r in recs], ["answerer_loop_abort"])
         self.assertEqual(recs[0]["attempt"], 1)
 
+    def test_audit_abort_row_carries_tail(self):
+        # 2026-10-24: the looped thinking survives in the audit row — the
+        # raise site (llm.chat_stream) attaches the guard's tail to the
+        # exception; constructed here exactly as it does
+        import json
+        looped = "зацикленный фрагмент размышлений. " * 5
+        self._fake_chat_stream([
+            llm.LLMLoopError("degenerate reasoning loop: unit x3",
+                             tail=looped),
+            [{"type": "content", "text": "Ответ."}],
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            audit = Audit(Path(tmp) / "audit.jsonl")
+            list(self._pipe(audit=audit).stream_answer(Q))
+            recs = [json.loads(l) for l in
+                    (Path(tmp) / "audit.jsonl").read_text(encoding="utf-8")
+                    .splitlines()]
+        self.assertEqual([r["stage"] for r in recs], ["answerer_loop_abort"])
+        self.assertEqual(recs[0]["tail"], looped)
+        self.assertIn("degenerate reasoning loop", recs[0]["error"])
+
     def test_clean_stream_has_no_reset(self):
         self._fake_chat_stream([
             [{"type": "reasoning", "text": "мысль"},

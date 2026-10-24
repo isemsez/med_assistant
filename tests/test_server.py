@@ -269,6 +269,25 @@ class TestChat(Base):
         done = dict(events)["done"]
         self.assertIsNone(done["message_id"])
 
+    def test_fatal_loop_stage_stop_carries_tail(self):
+        # 2026-10-24: the looped thinking survives in the fatal stage_stop
+        # row (`tail` = last LOOP_TAIL_CHARS chars; before, only the
+        # 80-char unit snippet inside `error` survived — LoopGuard.tail
+        # had been dead code)
+        looped = "негиперкератотические, негиперпигментационные, " * 4
+        self.pipe.answer_events = llm.LLMLoopError(
+            "degenerate reasoning loop: unit x3", tail=looped)
+        sid, _ = self.chat()
+        recs = [json.loads(l) for l in
+                (TMP / "audit.jsonl").read_text(encoding="utf-8")
+                .splitlines() if l.strip()]
+        rows = [r for r in recs if r.get("stage") == "stage_stop"
+                and r.get("stop_stage") == "answerer"
+                and r.get("session_id") == sid]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["tail"], looped)
+        self.assertIn("degenerate reasoning loop", rows[0]["error"])
+
     def test_history_passed_to_answerer(self):
         sid, _ = self.chat("Первый вопрос?")
         self.chat("Второй вопрос?", session_id=sid)

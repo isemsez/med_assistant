@@ -266,7 +266,8 @@ class Pipeline:
                     raise
                 if self.audit:
                     self.audit.log("answerer_loop_abort",
-                                   attempt=attempt + 1, error=str(e))
+                                   attempt=attempt + 1, error=str(e),
+                                   tail=getattr(e, "tail", None))
                 yield {"type": "reasoning_reset"}
 
     def answer(self, question, history=None, max_tokens=None, card=None,

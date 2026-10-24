@@ -206,7 +206,12 @@ final answer = raw answer + appendix block (local PDF links only)
   and content are untouched, only the sampler is nudged on a turn that
   was already lost. Loops after the first answer token are not guarded
   (aborting there would duplicate streamed text); `num_predict` bounds
-  them as before.
+  them as before. Both loop audit rows (`answerer_loop_abort`, the fatal
+  `stage_stop stop_stage=answerer`) also carry `tail` — the last
+  `LOOP_TAIL_CHARS` (default 2000) chars of the looped thinking, so the
+  degenerate content survives for analysis (2026-10-24: before, only the
+  80-char unit snippet inside `error` survived; `LoopGuard.tail` had
+  been dead code).
 
 ### [2] Labeler — extraction call
 

@@ -93,6 +93,31 @@ class TestAskCard(unittest.TestCase):
         pipe = self._ask()
         self.assertEqual(pipe.calls[0][4], None)
 
+    def test_loop_failure_stage_stop_carries_tail(self):
+        # 2026-10-24: same row shape as the server — the looped thinking
+        # survives on the CLI fatal stage_stop too
+        from medassistant import llm
+        looped = "зацикленный текст " * 4
+
+        def boom(*a, **kw):
+            raise llm.LLMLoopError("degenerate reasoning loop: unit x3",
+                                   tail=looped)
+            yield  # generator, like a real stream_answer
+
+        pipe = FakePipe()
+        pipe.stream_answer = boom
+        with mock.patch.object(cli, "_load_pipeline", return_value=pipe), \
+             mock.patch.object(cli.audit_mod, "Audit") as audit_cls, \
+             mock.patch.object(cli.drugmap, "load", return_value=None), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                cli.main(["ask", "--question", "Вопрос?"])
+        stops = [c for c in audit_cls.return_value.log.call_args_list
+                 if c.kwargs.get("stop_stage") == "answerer"]
+        self.assertEqual(len(stops), 1)
+        self.assertEqual(stops[0].kwargs.get("tail"), looped)
+        self.assertIn("degenerate reasoning loop", stops[0].kwargs["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
