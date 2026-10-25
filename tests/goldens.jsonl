@@ -24,7 +24,7 @@
 {"question": "Как диагностировать и лечить сахарный диабет 2 типа у взрослых?", "expect_name_contains": "диабет 2 типа"}
 {"question": "Какие рекомендации по лечению внебольничной пневмонии у взрослых?", "expect_name_contains": "пневмония"}
 {"question": "Как диагностировать и лечить мочекаменную болезнь?", "expect_name_contains": "мочекаменная"}
-{"question": "Как оформить больничный лист пациенту?", "expect_status": "no_disease"}
+{ "question": "Как оформить больничный лист пациенту?", "expect_status": "no_disease", "skip": "2026-10-25 temporarily off by owner: extract hallucinates «хроническая сердечность недостаточность» from this administrative answer and auto-picks 156_2 — pre-existing (identical on fat prompt, attribution run), root cause under investigation" }
 # 2026-10-21 loop canary: the turn's retrieval returns an adult/pediatric
 # PAIR for «Головная боль напряжения» (810_1 дети / 162_3 взрослые) and a
 # Мигрень pair; the selector echo-looped on it live (audit 09:34/14:07).

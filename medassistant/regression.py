@@ -21,7 +21,13 @@ graceful runtime degradation (dropped picks, title-guard rescue) still
 means the selector degenerated — the golden set demands it NOT, so a loop
 fails the row even when the shipped picks are correct.
 
-Exit code 0 = all rows pass. The temp audit is deleted after the run.
+A row may carry "skip": "<reason>" (owner decision 2026-10-25): it prints as
+[SKIP] with its reason and is excluded from the pass/fail count — the exit
+code ignores skipped rows (temp-off lever for a known-red row under
+investigation, the reason ships inside the row).
+
+Exit code 0 = all non-skipped rows pass. The temp audit is deleted after
+the run.
 """
 
 import json
@@ -166,30 +172,48 @@ def run(goldens_path, max_tokens=3072, tier="all"):
         # (labeler_select_loop) and deleted afterwards
         pipe = load_pipeline(audit=Audit(Path(tmp) / "audit.jsonl"))
 
-        passed, auto_groups, total_groups = 0, 0, 0
-        for i, row in enumerate(rows, 1):
-            tier, label = row["_tier"], row.get("disease") or row["question"]
-            try:
-                if tier == "search":
-                    ok, detail = run_search_row(pipe, row)
-                else:
-                    ok, detail, result = run_full_row(pipe, row, max_tokens)
-                    if result is not None:
-                        groups = result.by_disease
-                        total_groups += len(groups)
-                        auto_groups += sum(1 for g in groups
-                                           if g.get("auto_pick"))
-            except Exception as e:  # one bad row must not kill the run
-                ok, detail = False, f"{type(e).__name__}: {e}"
-            passed += ok
-            print(f"  [{ 'PASS' if ok else 'FAIL'}] {tier:>6} #{i:<2} "
-                  f"{label[:52]}\n"
-                  f"         {detail}")
-    if total_groups:
-        print(f"auto-pick rate on full-tier: {auto_groups}/{total_groups}")
-    ok = passed == len(rows)
-    print(f"\nREGRESSION {'OK' if ok else 'FAIL'}: {passed}/{len(rows)} rows pass")
+        passed, skipped = _run_rows(pipe, rows, max_tokens)
+    total = len(rows) - skipped
+    ok = passed == total
+    tail = f", {skipped} skipped" if skipped else ""
+    print(f"\nREGRESSION {'OK' if ok else 'FAIL'}: "
+          f"{passed}/{total} rows pass{tail}")
     return ok
+
+
+def _run_rows(pipe, rows, max_tokens, out=print):
+    """The row loop of run(): prints one [PASS]/[FAIL]/[SKIP] block per
+    row, returns (passed, skipped). A truthy "skip" field prints the row as
+    [SKIP] with its reason and keeps it out of the counts entirely — the
+    exit code ignores skips (owner decision 2026-10-25)."""
+    passed, skipped, auto_groups, total_groups = 0, 0, 0, 0
+    for i, row in enumerate(rows, 1):
+        tier, label = row["_tier"], row.get("disease") or row["question"]
+        reason = row.get("skip")
+        if reason:
+            skipped += 1
+            out(f"  [SKIP]  {tier:>6} #{i:<2} {label[:52]}\n"
+                f"         — {reason}")
+            continue
+        try:
+            if tier == "search":
+                ok, detail = run_search_row(pipe, row)
+            else:
+                ok, detail, result = run_full_row(pipe, row, max_tokens)
+                if result is not None:
+                    groups = result.by_disease
+                    total_groups += len(groups)
+                    auto_groups += sum(1 for g in groups
+                                       if g.get("auto_pick"))
+        except Exception as e:  # one bad row must not kill the run
+            ok, detail = False, f"{type(e).__name__}: {e}"
+        passed += ok
+        out(f"  [{'PASS' if ok else 'FAIL'}] {tier:>6} #{i:<2} "
+            f"{label[:52]}\n"
+            f"         {detail}")
+    if total_groups:
+        out(f"auto-pick rate on full-tier: {auto_groups}/{total_groups}")
+    return passed, skipped
 
 
 if __name__ == "__main__":

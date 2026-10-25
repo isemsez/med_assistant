@@ -74,6 +74,17 @@ class TestLoadGoldens(unittest.TestCase):
         with self.assertRaises(SystemExit):
             regression.load_goldens(Path("nope.jsonl"))
 
+    def test_skip_field_preserved_by_loader(self):
+        # owner decision 2026-10-25: "skip" rides along, tier detection
+        # is unaffected — the runner, not the loader, honors it
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "g.jsonl"
+            p.write_text('{"question": "q", "expect_status": "no_disease",'
+                         ' "skip": "off today"}', encoding="utf-8")
+            rows = regression.load_goldens(p)
+            self.assertEqual(rows[0]["_tier"], "full")
+            self.assertEqual(rows[0]["skip"], "off today")
+
 
 class TestSearchRow(unittest.TestCase):
     def test_pass_and_fail(self):
@@ -189,3 +200,27 @@ class TestFullRow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSkipRows(unittest.TestCase):
+    def test_skip_row_skipped_and_not_counted(self):
+        # owner decision 2026-10-25: a "skip" row prints [SKIP] + reason,
+        # leaves the pass/fail count and the exit code alone
+        rows = [
+            {"disease": "ХСН", "expect_name_contains": "недостаточн",
+             "_tier": "search"},
+            {"question": "Как оформить больничный лист пациенту?",
+             "expect_status": "no_disease", "_tier": "full",
+             "skip": "2026-10-25 temporarily off by owner"},
+        ]
+        lines = []
+        passed, skipped = regression._run_rows(
+            FakePipe(cards=[{"code_version": "156_2",
+                             "name": "Хроническая сердечная недостаточность",
+                             "score": 0.91}]),
+            rows, 3072, out=lines.append)
+        self.assertEqual((passed, skipped), (1, 1))
+        self.assertTrue(any("[SKIP]" in l and "больничный" in l
+                            and "temporarily off" in l for l in lines))
+        self.assertTrue(any("[PASS]" in l for l in lines))
+        self.assertFalse(any("[FAIL]" in l for l in lines))
