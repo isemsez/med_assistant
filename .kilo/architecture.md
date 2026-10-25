@@ -100,6 +100,26 @@ final answer = raw answer + appendix block (local PDF links only)
   was reverted. The plain МНН-only rule answers such questions correctly
   in most runs but still fabricates occasionally (2026-10-11) — residual
   4B flakiness, documented lever: 27B tier via `CANDIDATE_*`.
+  **Aggressive slim (2026-10-25, owner decision)**: `SYSTEM_ANSWERER` cut
+  1722 → 983 chars, МНН mentions 7 → 3 (guarded by
+  `test_answerer_prompt_stays_slim`, tests/test_pipeline.py): MedGemma 1.5
+  is not trained on system prompts (it ships with one-liner system
+  prompts), and the fat rules block was echo fuel for the thinking
+  rules-check loop — the looped unit was the model re-checking the МНН
+  rules themselves («Use only INN?», 17 audit-era `answerer_loop_abort`s,
+  4/4 on «Что происходит при инфаркте?»). Drug rules merged into one:
+  МНН-only + no «по созвучию» re-identification + the Валидол echo
+  example + register-grounding; dropped the no-foreign-parens clause,
+  the no-duplicate-МНН clause and the explicit anti-fabrication wording
+  (documented ineffective 2026-10-11..12 above). Battery 2026-10-25:
+  answerer loop 0/4 on the infarct question (baseline 4/4 attempt-1
+  aborts, the «Use only INN?» unit never returned; 46–57 s vs 63–74 s
+  clean / ~80–85 s looped), валидол correct МНН without Valium/диазепам
+  drift, Сорбифер verbatim from the register block, canary OK,
+  regression 13/15 pass + 1 skipped (#15 больничный temp-off'd — the
+  extract hallucinates ХСН on the administrative answer, identical on
+  the fat prompt; attribution run: fat 13/16, slim 12/16, same flake
+  families, nothing slim-specific).
   **Register-grounded МНН lookup** (owner decision 2026-10-12; matching v2
   2026-10-13): the question is scanned for register trade names
   (`data/drugs.sqlite`, built by `scripts/grls_to_sqlite.py` from a ГРЛС

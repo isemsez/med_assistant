@@ -373,7 +373,12 @@ Answer-file rows: `{"question", "raw_answer"}` (live labeler + search) or with
   `labeler_select_loop` in the turn (owner decision 2026-10-21: a graceful
   degradation — dropped picks, title-guard rescue — still means the
   selector degenerated; the golden set demands it NOT, so a correct-picks
-  turn with a looped reasoning fails the row); the loop-canary row
+  turn with a looped reasoning fails the row); a row may carry a "skip"
+  reason (2026-10-25): printed as [SKIP] with its reason, excluded from
+  the count and the exit code — #15 «Как оформить больничный лист?»
+  (`no_disease`) is temp-off'd this way (the extract hallucinates ХСН
+  from the administrative answer and auto-picks 156_2, identical on the
+  old fat prompt — root cause under investigation); the loop-canary row
   «А просто при головной боли?» expects the ADULT «ГБН» version (rule 4)
   and is the standing red demand for a healthy selector — it also fails
   on a wrong-audience pick, which is how the 4B's детские pick was

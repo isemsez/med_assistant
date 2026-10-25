@@ -1238,6 +1238,15 @@ class TestDrugContext(unittest.TestCase):
         self.assertIn("справочно", seen["messages"][-1]["content"])
 
 
+
+    def test_answerer_prompt_stays_slim(self):
+        # 2026-10-25 aggressive slim: 1722 -> ~1000 chars; МНН 7 -> 3
+        # mentions (rules-check echo fuel, MedGemma runs on one-liner
+        # system prompts). Guards against re-fattening.
+        from medassistant import prompts
+        self.assertLessEqual(len(prompts.SYSTEM_ANSWERER), 1100)
+        self.assertLessEqual(prompts.SYSTEM_ANSWERER.count("МНН"), 3)
+
 class TestPromptSilence(unittest.TestCase):
     def test_answerer_prompt_is_silent_about_machinery(self):
         from medassistant import prompts
