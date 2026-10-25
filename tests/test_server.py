@@ -223,6 +223,35 @@ class TestChat(Base):
         msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
         self.assertEqual(msgs[1]["reasoning"], "мысль")
 
+    def test_spaced_thought_prefix_dropped_across_deltas(self):
+        # live llama-server shape (2026-10-20/21 stored rows): the model opens
+        # <think> itself and its first token carries the leading space, so the
+        # marker is " thought\n" — the bare-form strip let it leak through
+        self.pipe.answer_events = [
+            {"type": "reasoning", "text": " tho"},
+            {"type": "reasoning", "text": "ught\nмысль"},
+            {"type": "content", "text": "Ответ."},
+        ]
+        sid, events = self.chat()
+        reasoning = "".join(d["t"] for e, d in events if e == "reasoning")
+        self.assertEqual(reasoning, "мысль")
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertEqual(msgs[1]["reasoning"], "мысль")
+
+    def test_markerless_reasoning_untouched_by_stray_filter(self):
+        # a marker-less stream loses nothing, even one that shares the
+        # marker's first byte and is held across the delta boundary
+        self.pipe.answer_events = [
+            {"type": "reasoning", "text": " "},
+            {"type": "reasoning", "text": "Обычная мысль."},
+            {"type": "content", "text": "Ответ."},
+        ]
+        sid, events = self.chat()
+        reasoning = "".join(d["t"] for e, d in events if e == "reasoning")
+        self.assertEqual(reasoning, " Обычная мысль.")
+        msgs = self.client.get(f"/api/sessions/{sid}/messages").json()
+        self.assertEqual(msgs[1]["reasoning"], " Обычная мысль.")
+
     def test_reasoning_reset_clears_thinking(self):
         # watchdog aborted a looped stream upstream; the retry restarts
         # reasoning (stray "thought\n" prefix dropped again) and only the

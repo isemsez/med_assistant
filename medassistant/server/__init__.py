@@ -335,23 +335,32 @@ def chat(req: ChatRequest):
         try:
             parts, reasoning_parts, failed = [], [], False
             t_answer = time.monotonic()
-            # Stray-prefix filter: medgemma reasoning under the previous
-            # backend began with a literal "thought\n"; llama-server pre-opens <think> and
-            # the artifact disappears (2026-10-18 backend port). The prefix is
-            # matched across deltas and dropped only when it is actually
-            # present — a clean backend loses nothing.
+            # Stray-prefix filter: medgemma's default thinking opens with a
+            # literal "thought" word. Under llama-server the model opens <think>
+            # itself and its first token carries the leading space, so the
+            # marker arrives as " thought\n" — the 2026-10-18 port assumed the
+            # artifact had disappeared and the bare-"thought\n" strip let the
+            # spaced form leak into «Размышления модели» and the stored message
+            # (live rows 2026-10-20/21; Ollama had eaten the space). Both
+            # shapes are matched across deltas and dropped only when actually
+            # present — a stream that starts differently loses nothing.
+            strays = (" thought\n", "thought\n")
             prefix = [""]
 
             def _strip_stray(t):
                 if prefix[0] is None:
                     return t
                 buf = prefix[0] + t
-                stray = "thought\n"
-                if len(buf) < len(stray) and stray.startswith(buf):
-                    prefix[0] = buf
+                for stray in strays:
+                    if buf.startswith(stray):
+                        prefix[0] = None
+                        return buf[len(stray):]
+                if len(buf) < max(map(len, strays)) and \
+                        any(s.startswith(buf) for s in strays):
+                    prefix[0] = buf  # still too short to decide
                     return ""
                 prefix[0] = None
-                return buf[len(stray):] if buf.startswith(stray) else buf
+                return buf
 
             it = pipe.stream_answer(question, history, card=card_ctx,
                                     drug=drug, cancel=turn.cancel)

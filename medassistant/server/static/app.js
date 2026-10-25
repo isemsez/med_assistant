@@ -241,8 +241,10 @@ async function loadSession(id) {
           // restored from the store: collapsed, the physician can expand;
           // rendered with fmt() so markdown emphasis matches the answer
           const t = makeThinkingBlock(node);
-          // legacy stored reasoning carries the stray leading "thought\n"
-          t.body.innerHTML = fmt(m.reasoning.replace(/^thought\n/, ""));
+          // legacy stored reasoning carries the stray leading marker —
+          // " thought\n" (llama-server rows before the 2026-10-25 strip fix)
+          // or bare "thought\n" (Ollama era)
+          t.body.innerHTML = fmt(m.reasoning.replace(/^ ?thought\n/, ""));
         }
         if (m.appendix) renderAppendix(m.appendix, node);
       } else if (m.drug_map && m.drug_map.length) {
