@@ -361,7 +361,7 @@ class TestManualExtract(unittest.TestCase):
         from medassistant import prompts
         pipe, seen = self._pipe('{"diseases": [" ХСН ", "ХСН", "ХОБЛ"]}')
         self.assertEqual(pipe.extract_manual("ХСН и ХОБЛ"), ["ХСН", "ХОБЛ"])
-        self.assertIs(seen["system"], prompts.SYSTEM_LABELER_EXTRACT_DIRECT)
+        self.assertIs(seen["system"], prompts.SYSTEM_LABELER_EXTRACT_QUESTION)
         self.assertEqual(seen["user"], "ХСН и ХОБЛ")
 
     def test_invalid_output_raises(self):
@@ -1256,7 +1256,7 @@ class TestPromptSilence(unittest.TestCase):
     def test_labeler_prompts_demand_json(self):
         from medassistant import prompts
         for p in (prompts.SYSTEM_LABELER_EXTRACT,
-                  prompts.SYSTEM_LABELER_EXTRACT_DIRECT,
+                  prompts.SYSTEM_LABELER_EXTRACT_QUESTION,
                   prompts.SYSTEM_LABELER_SELECT):
             self.assertIn("JSON", p)
 
@@ -1269,7 +1269,7 @@ class TestPromptSilence(unittest.TestCase):
         # back; the specific replacement terms stay unpinned (cheap swaps)
         from medassistant import prompts
         for p in (prompts.SYSTEM_LABELER_EXTRACT,
-                  prompts.SYSTEM_LABELER_EXTRACT_DIRECT):
+                  prompts.SYSTEM_LABELER_EXTRACT_QUESTION):
             for name in ("железодефицитная анемия",
                          "хроническая сердечная недостаточность",
                          "диабетическая полинейропатия"):
@@ -1282,7 +1282,7 @@ class TestPromptSilence(unittest.TestCase):
         # appear in a Russian prompt
         from medassistant import prompts
         body = (prompts.SYSTEM_LABELER_EXTRACT
-                + prompts.SYSTEM_LABELER_EXTRACT_DIRECT
+                + prompts.SYSTEM_LABELER_EXTRACT_QUESTION
                 ).lower().replace("ё", "е")
         for term in prompts.EXTRACT_DENYLIST:
             if term.isascii():
@@ -1301,7 +1301,7 @@ class TestPromptSilence(unittest.TestCase):
             if system is prompts.SYSTEM_LABELER_EXTRACT:
                 self.assertIn("Ответ ассистента", user)
                 return ["артериальная гипертензия"]
-            self.assertIs(system, prompts.SYSTEM_LABELER_EXTRACT_DIRECT)
+            self.assertIs(system, prompts.SYSTEM_LABELER_EXTRACT_QUESTION)
             self.assertNotIn("Ответ ассистента", user)
             return ["гипертония", "диабет", "диабет"]
 
@@ -1318,7 +1318,7 @@ class TestPromptSilence(unittest.TestCase):
         self.assertIn("фактически идет речь в ответе",
                       prompts.SYSTEM_LABELER_EXTRACT)
         self.assertNotIn("фактически идет речь в ответе",
-                         prompts.SYSTEM_LABELER_EXTRACT_DIRECT)
+                         prompts.SYSTEM_LABELER_EXTRACT_QUESTION)
 
 
 class TestStreamAnswerLoopRetry(unittest.TestCase):
@@ -1550,7 +1550,7 @@ class TestExtractDenylist(unittest.TestCase):
         pipe = make_pipe()
 
         def fake_chat(system, user, max_tokens, schema):
-            if system is prompts.SYSTEM_LABELER_EXTRACT_DIRECT:
+            if system is prompts.SYSTEM_LABELER_EXTRACT_QUESTION:
                 return '{"diseases": ["синдром Марфана"]}'
             return ('{"diseases": ["инфаркт миокарда",'
                     ' "Marfan syndrome"]}')

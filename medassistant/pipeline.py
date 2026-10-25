@@ -381,7 +381,7 @@ class Pipeline:
         answer_diseases = self._extract_call(prompts.SYSTEM_LABELER_EXTRACT,
                                              _extract_user(question, answer))
         question_diseases = self._extract_call(
-            prompts.SYSTEM_LABELER_EXTRACT_DIRECT, question)
+            prompts.SYSTEM_LABELER_EXTRACT_QUESTION, question)
         merged = list(answer_diseases)
         low = {d.lower() for d in merged}
         for d in question_diseases:
@@ -394,7 +394,7 @@ class Pipeline:
         """Labeler 1 in direct mode: parse a doctor-typed «pdf » payload
         into a clean disease list (owner decision 2026-10-04 — labeler 1
         normalizes the manual input and decides one vs several diseases)."""
-        return self._extract_call(prompts.SYSTEM_LABELER_EXTRACT_DIRECT,
+        return self._extract_call(prompts.SYSTEM_LABELER_EXTRACT_QUESTION,
                                   payload, manual=True)
 
     def _real_search(self, variants):
