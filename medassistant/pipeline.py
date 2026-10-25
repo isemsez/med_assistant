@@ -331,6 +331,26 @@ class Pipeline:
                 out.append(d)
         return out
 
+    def _apply_extract_denylist(self, diseases):
+        """Owner decision 2026-10-25: the 4B extract dominantly echoes its
+        own prompt examples on administrative answers — an echo must never
+        reach search/auto-pick/select (echoed ХСН auto-picked 156_2 at
+        0.867; a sub-0.80 echo met a rubber-stamping select, 5 garbage
+        picks live). Register-absent examples lose nothing by being denied:
+        no guideline exists to find. Normalized exact match (lowercase,
+        ё->е); dropped terms audited as `extract_denied`. Applied inside
+        _extract_call so EVERY pass is covered: the answer-anchored pass,
+        the question-extras pass, and extract_manual (pdf turns)."""
+        if not diseases:
+            return diseases
+        norm = lambda d: d.strip().lower().replace("ё", "е")
+        dropped = [d for d in diseases if norm(d) in prompts.EXTRACT_DENYLIST]
+        if dropped and self.audit:
+            self.audit.log("extract_denied", dropped=dropped)
+        if not dropped:
+            return diseases
+        return [d for d in diseases if norm(d) not in prompts.EXTRACT_DENYLIST]
+
     def _extract_call(self, system, user, manual=False):
         t0 = time.monotonic()
         raw = self._labeler_chat(system, user,
@@ -341,7 +361,7 @@ class Pipeline:
             self.audit.log("labeler_extract", raw=raw,
                            dur_s=round(time.monotonic() - t0, 2), **kw)
         try:
-            return self._parse_diseases(raw)
+            return self._apply_extract_denylist(self._parse_diseases(raw))
         except llm.LLMError as e:
             if self.audit:
                 self.audit.log("labeler_extract_invalid", raw=raw, error=str(e))

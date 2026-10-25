@@ -1260,6 +1260,35 @@ class TestPromptSilence(unittest.TestCase):
                   prompts.SYSTEM_LABELER_SELECT):
             self.assertIn("JSON", p)
 
+    def test_extract_examples_are_register_absent(self):
+        # 2026-10-25 owner mitigation: extract prompt examples are echoed by
+        # the 4B on administrative answers — an example present in the
+        # register scores >= AUTO_PICK_MIN in search and the echoed example
+        # ships a wrong pdf with no labeler-2 check (ХСН -> 156_2 0.867,
+        # live 2026-10-25); the three register-present names must not creep
+        # back; the specific replacement terms stay unpinned (cheap swaps)
+        from medassistant import prompts
+        for p in (prompts.SYSTEM_LABELER_EXTRACT,
+                  prompts.SYSTEM_LABELER_EXTRACT_DIRECT):
+            for name in ("железодефицитная анемия",
+                         "хроническая сердечная недостаточность",
+                         "диабетическая полинейропатия"):
+                self.assertNotIn(name, p)
+
+    def test_extract_denylist_matches_examples(self):
+        # owner 2026-10-25 mitigation: the denylist must cover the RU terms
+        # living in the extract prompts (examples <-> denylist sync); EN
+        # equivalents ride along uncovered by this check — they cannot
+        # appear in a Russian prompt
+        from medassistant import prompts
+        body = (prompts.SYSTEM_LABELER_EXTRACT
+                + prompts.SYSTEM_LABELER_EXTRACT_DIRECT
+                ).lower().replace("ё", "е")
+        for term in prompts.EXTRACT_DENYLIST:
+            if term.isascii():
+                continue
+            self.assertIn(term, body)
+
     def test_extract_two_pass_merge_answer_first(self):
         # owner decision 2026-10-20: diseases from both sources — the
         # answer-anchored pass first, the pdf-direct question pass appends
@@ -1477,3 +1506,69 @@ class TestStreamAnswerCancel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExtractDenylist(unittest.TestCase):
+    """Pre-retrieval denylist (owner decision 2026-10-25): the 4B extract
+    dominantly echoes its own prompt examples on administrative answers —
+    an echo must never reach search/auto-pick/select."""
+
+    @staticmethod
+    def _rows(tmp):
+        import json
+        return [json.loads(l) for l in
+                Path(tmp, "audit.jsonl").read_text(encoding="utf-8").splitlines()
+                if l.strip()]
+
+    def test_denied_term_dropped_and_audited(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pipe = make_pipe(tmp=tmp)
+            self.assertEqual(pipe._apply_extract_denylist(
+                ["Синдром Жильбера", " Gilbert Syndrome "]), [])
+            denied = [r for r in self._rows(tmp)
+                      if r["stage"] == "extract_denied"]
+            self.assertEqual(len(denied), 1)
+            self.assertEqual(denied[0]["dropped"],
+                             ["Синдром Жильбера", " Gilbert Syndrome "])
+
+    def test_mixed_list_keeps_real_diseases(self):
+        pipe = make_pipe()
+        self.assertEqual(
+            pipe._apply_extract_denylist(
+                ["инфаркт миокарда", "синдром Марфана", "стенокардия"]),
+            ["инфаркт миокарда", "стенокардия"])
+
+    def test_all_denied_becomes_empty(self):
+        pipe = make_pipe()
+        self.assertEqual(pipe._apply_extract_denylist(
+            ["наследственный гемохроматоз", "marfan syndrome"]), [])
+
+    def test_every_extract_pass_filtered(self):
+        # the filter lives in _extract_call, so BOTH _real_extract passes
+        # (answer-anchored + question-extras) go through it
+        from medassistant import prompts
+        pipe = make_pipe()
+
+        def fake_chat(system, user, max_tokens, schema):
+            if system is prompts.SYSTEM_LABELER_EXTRACT_DIRECT:
+                return '{"diseases": ["синдром Марфана"]}'
+            return ('{"diseases": ["инфаркт миокарда",'
+                    ' "Marfan syndrome"]}')
+        pipe._labeler_chat = fake_chat
+        self.assertEqual(pipe._real_extract("вопрос", "ответ"),
+                         ["инфаркт миокарда"])
+
+    def test_manual_pdf_path_filtered_to_no_disease(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pipe = make_pipe(tmp=tmp)
+
+            def fake_chat(system, user, max_tokens, schema):
+                return '{"diseases": ["синдром Жильбера", "Гемохроматоз"]}'
+            pipe._labeler_chat = fake_chat
+            self.assertEqual(pipe.extract_manual("pdf синдром Жильбера"), [])
+            events = list(pipe.iter_appendix("синдром Жильбера", "",
+                                             manual=True))
+            result = [e for e in events if e.get("stage") == "done"][0]["result"]
+            self.assertEqual(result.status, "no_disease")
+            stages = [r["stage"] for r in self._rows(tmp)]
+            self.assertNotIn("search", stages)   # never reached retrieval

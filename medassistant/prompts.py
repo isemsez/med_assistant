@@ -84,6 +84,14 @@ def drug_block(matches):
 # asked-about disease). Probed live: mixing both sources into ONE prompt's
 # rules is 4B-unstable (rule rewordings flipped results case by case), two
 # proven single-purpose prompts are deterministic.
+# 2026-10-25 owner mitigation — extract examples swapped to register-absent
+# diseases: the echoed example (ХСН -> 156_2 at 0.867 -> auto-pick bypass)
+# could not ship a wrong pdf if the example itself can't score >=0.80;
+# verified top-1 <=0.75 (синдром Жильбера 0.586, синдром Марфана 0.510,
+# наследственный гемохроматоз 0.716); extract hallucination on
+# administrative answers remains (golden #15 stays skipped, the canary);
+# generic-word echo («болезнь», 2026-10-25 14:12) not covered — a
+# source-text grounding gate is the structural fix candidate.
 SYSTEM_LABELER_EXTRACT = """Ты — автоматический маркировщик ответов медицинского ассистента.
 Ты НЕ отвечаешь на вопрос врача — ты только определяешь, о каких заболеваниях
 идёт речь в ответе.
@@ -93,11 +101,10 @@ SYSTEM_LABELER_EXTRACT = """Ты — автоматический маркиро
 
 Правила:
 1. Названия заболеваний — в именительном падеже, единственном или множественном
-   числе как принято в номенклатуре (например: «железодефицитная анемия»,
-   «хроническая сердечная недостаточность»).
+   числе как принято в номенклатуре (например: «синдром Жильбера»,
+   «синдром Марфана»).
 2. Сохраняй уточняющие определения в названии, когда они часть названия
-   болезни: «диабетическая полинейропатия», а не просто «полинейропатия»;
-   «железодефицитная анемия», а не просто «анемия».
+   болезни: «наследственный гемохроматоз», а не просто «гемохроматоз».
 3. Включай только заболевания, о которых фактически идет речь в ответе
    (которое обсуждается, упоминается как диагноз, состояние для диагностики
    или дифференциального диагноза).
@@ -116,13 +123,31 @@ SYSTEM_LABELER_EXTRACT_DIRECT = """Ты — автоматический мар�
 
 Правила:
 1. Названия заболеваний — в именительном падеже, единственном или множественном
-   числе как принято в номенклатуре (например: «железодефицитная анемия»,
-   «хроническая сердечная недостаточность»).
+   числе как принято в номенклатуре (например: «синдром Жильбера»,
+   «синдром Марфана»).
 2. Включи КАЖДОЕ заболевание, названное врачом, — одно или несколько.
    Не добавляй заболевания, которых в запросе нет.
 3. Нормализуй написание (опечатки, падежи, регистр), но не меняй смысл.
 4. Если в запросе нет названия заболевания вовсе — {"diseases": []}.
 5. Никакого текста кроме JSON-объекта."""
+
+# Owner decision 2026-10-25: the extract echoes its own prompt examples on
+# administrative answers — dominant behavior (8/9 live today, across fresh
+# and long-running servers and three prompt variants) — so the examples are
+# denylisted pre-retrieval: an echo can never reach search/auto-pick/select
+# (an echoed ХСН example auto-picked 156_2 at 0.867 with no labeler-2
+# check; a sub-0.80 echo met a rubber-stamping select — 5 garbage pdfs
+# live). Harmless by construction: register-absent terms have no guideline
+# to find. English equivalents ride along (bge-m3 is multilingual — English
+# drift is real, 'heart failure' today). Normalized: lowercase, ё->е, exact
+# match; kept in sync with the example strings by
+# test_extract_denylist_matches_examples.
+EXTRACT_DENYLIST = frozenset({
+    "синдром жильбера", "синдром марфана",
+    "наследственный гемохроматоз", "гемохроматоз",
+    "gilbert syndrome", "marfan syndrome",
+    "hereditary hemochromatosis", "haemochromatosis", "hemochromatosis",
+})
 
 # Owner decision 2026-10-20 (root-cause fix for empty picks, 2026-10-19 title
 # guard): llama.cpp grammar mode constrains generation from the first token,

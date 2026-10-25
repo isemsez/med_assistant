@@ -271,6 +271,34 @@ final answer = raw answer + appendix block (local PDF links only)
   the symptom/complaint filter and the select stage (which still judges
   candidates against the answer).
 - Earlier the same day the extraction was strictly answer-anchored with a
+- **Extract example-echo mitigation** (2026-10-25, owner decision): the 4B
+  extract echoes its own prompt examples on administrative answers — the
+  DOMINANT behavior (8/9 live: ХСН 0.867 -> auto-pick 156_2 with no
+  labeler-2 check, silent wrong pdf), not a degradation window. Falsified
+  fixes first: dropping the ХСН example alone -> the REMAINING example
+  («железодефицитная анемия») echoed 3/3 deterministically; stripping ALL
+  disease names + the [] form in the template line -> the generic word
+  «болезнь» echoed 3/3 (worse: select rubber-stamped 5 garbage pdfs when a
+  sub-0.80 echo reached it); a labeler-server restart diagnostic -> a
+  fresh server hallucinates 3/3 too (server-state hypothesis refuted;
+  the lone clean [] was per-request slot nondeterminism, n_slots=4).
+  Landed mitigation: examples swapped to register-absent diseases
+  (синдром Жильбера 0.586, синдром Марфана 0.510, наследственный
+  гемохроматоз 0.716 — all top-1 ≤ 0.75, verified live; алкогольная
+  полинейропатия rejected at 0.834) AND `prompts.EXTRACT_DENYLIST` — a
+  pre-retrieval hard denylist (RU + English equivalents; bge-m3 is
+  multilingual, English drift is real) applied inside `_extract_call` so
+  every pass is covered (answer-anchored, question-extras, manual/pdf);
+  dropped terms audited as `extract_denied`; all-denied == a clean []
+  (no_disease, no search, no appendix). Harmless by construction: a
+  register-absent term has no guideline to find. Gates: больничный ×3
+  no-pdf, real-disease sanity ×2 no hijack, canary OK, golden #15
+  (no_disease) back ON and PASSING — the standing canary for the extract
+  hallucination itself. Still open: the hallucination remains (now
+  harmless on the example path), the generic-word echo («болезнь») and
+  English drift on real diseases are uncovered — a source-text grounding
+  gate (extracted disease must occur in question/answer before retrieval)
+  is the structural fix candidate.
   bare-answer fallback — superseded by the question+answer widening above.
 - Output is schema-constrained (structured decoding), temperature 0, small
   token budget.
