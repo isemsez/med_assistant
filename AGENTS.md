@@ -5,10 +5,16 @@ post-hoc guideline verification appendix. The authoritative design is
 [`.kilo/architecture.md`](.kilo/architecture.md); this README is the runbook.
 
 Pipeline: ANSWERER (plain medical model, guideline-blind) → LABELER call 1
-(diseases as JSON; gathered from BOTH the answer — first — and the question —
-extras after, 2026-10-20: a «Да.» answer to «А при инсульте?» and a drifted
-answer used to extract `[]`/partial and the asked-about guideline was
-missed) →
+(diseases as JSON; answer-anchored, the bare question analyzed only as a
+FALLBACK when the answer names no disease — owner decision 2026-10-25
+evening, back to the e77ef04 principle in code: the 2026-10-20 both-passes
+widening cost a second extract call on every turn and near-form duplicates
+ran double search+select («инфаркт миокарда» from the answer + «инфаркт»
+from the question, session 98 16:47 — the ambiguous short form attached
+the stroke pdf 814_1 live); the widening's drifted-answer cover is given
+up — the doctor re-asks as a separate single-disease question; a «Да.»
+answer to «А при инсульте?» still anchors the asked-about guideline via
+the fallback; empty-after-denylist counts as empty) →
 TOOL `search_guidelines` (embedding index, top-5 cards, no
 URLs) → LABELER call 2 (pick ids or none) → RENDERER (register PDF links under
 the untouched answer). Labeler call 2 reasons INSIDE the grammar JSON: the

@@ -74,16 +74,19 @@ def drug_block(matches):
     return ("(справочно, из государственного реестра лекарственных средств:\n"
             + ";\n".join(lines) + ")")
 
-# Diseases from BOTH sources (owner decision 2026-10-20, widening the MVP
-# answer-only anchor): implemented as TWO labeler passes merged answer-first
-# in pipeline._real_extract — this pass over question+answer stays the
-# PROVEN strict answer-anchor (DISEASE_CAP-protected source primary), and a
-# second pass reuses SYSTEM_LABELER_EXTRACT_QUESTION over the bare question to
-# catch what the answer skipped («Да.» to «А при инсульте?» extracted [] and
-# the guideline was missed; a drifted answer could silently drop an
-# asked-about disease). Probed live: mixing both sources into ONE prompt's
-# rules is 4B-unstable (rule rewordings flipped results case by case), two
-# proven single-purpose prompts are deterministic.
+# Diseases: answer-anchored, the bare question as an EMPTY-ANSWER FALLBACK
+# (owner decision 2026-10-25 evening, back to the e77ef04 principle — now
+# in code): pipeline._real_extract runs this question+answer pass first and
+# reuses SYSTEM_LABELER_EXTRACT_QUESTION over the bare question only when
+# the answer names no disease («Да.» to «А при инсульте?» extracted [] and
+# the guideline was missed). The 2026-10-20 both-passes widening cost a
+# second extract call every turn and near-form duplicates ran double
+# search+select («инфаркт миокарда» + «инфаркт», session 98 16:47 — the
+# ambiguous short form attached a stroke pdf live); its drifted-answer
+# cover is given up: the doctor re-asks as a single-disease question.
+# Probed live 2026-10-20: mixing both sources into ONE prompt's rules is
+# 4B-unstable (rule rewordings flipped results case by case), two proven
+# single-purpose prompts are deterministic.
 # 2026-10-25 owner mitigation — extract examples swapped to register-absent
 # diseases: the echoed example (ХСН -> 156_2 at 0.867 -> auto-pick bypass)
 # could not ship a wrong pdf if the example itself can't score >=0.80;

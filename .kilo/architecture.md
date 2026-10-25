@@ -261,16 +261,28 @@ final answer = raw answer + appendix block (local PDF links only)
   whatever labeler model the tier provides).
 - Input: question + raw answer. Output: **JSON list of disease names**
   (nominative case), `[]` when neither names a disease.
-- Sources: question + answer, both (owner decision 2026-10-20, widening the
-  MVP answer-only anchor): answer-discussed diseases come FIRST (their
-  extraction must not lose `DISEASE_CAP=3` slots), question-named extras are
-  appended after. A «Да.» answer to «А при инсульте?» anchors the stroke
-  guideline (bare confirmations extracted `[]` before this change and the
-  guideline was missed); a drifted answer can no longer silently drop a
-  disease the physician asked about. Question-only noise stays bounded by
-  the symptom/complaint filter and the select stage (which still judges
-  candidates against the answer).
-- Earlier the same day the extraction was strictly answer-anchored with a
+- Sources: answer-anchored, with the bare question as an EMPTY-ANSWER
+  FALLBACK (owner decision 2026-10-25 evening, back to the e77ef04
+  principle — now in code, not a prompt rule the 4B ignored): the
+  question+answer pass runs first; when it names no disease, the bare
+  question is analyzed with the direct prompt. A «Да.» answer to «А при
+  инсульте?» still anchors the asked-about guideline (bare confirmations
+  extracted `[]` and the guideline was missed before the 2026-10-20 fix).
+  The 2026-10-20 both-passes widening (question extras always, merged
+  answer-first) cost a second extract call on every turn and near-form
+  duplicates ran double search+select («инфаркт миокарда» from the answer
+  + «инфаркт» from the question, session 98 16:47 — the ambiguous short
+  form attached the stroke pdf live); its drifted-answer cover (a
+  non-empty answer silently dropping an asked-about disease) is given up:
+  the doctor re-asks as a separate single-disease question. An answer
+  emptied by the denylist counts as empty (all-denied == no_disease).
+  Question-only noise stays bounded by the symptom/complaint filter and
+  the select stage (which still judges candidates against the answer).
+- History: the MVP extraction was strictly answer-anchored; e77ef04
+  (2026-10-20) added a prompt-rule bare-answer fallback (question only
+  when the answer names none) — the 4B ignored the rule, and the same
+  evening's widening superseded it with both passes always merged; the
+  2026-10-25 evening decision brought the fallback back, code-level.
 - **Extract example-echo mitigation** (2026-10-25, owner decision): the 4B
   extract echoes its own prompt examples on administrative answers — the
   DOMINANT behavior (8/9 live: ХСН 0.867 -> auto-pick 156_2 with no
@@ -288,7 +300,7 @@ final answer = raw answer + appendix block (local PDF links only)
   полинейропатия rejected at 0.834) AND `prompts.EXTRACT_DENYLIST` — a
   pre-retrieval hard denylist (RU + English equivalents; bge-m3 is
   multilingual, English drift is real) applied inside `_extract_call` so
-  every pass is covered (answer-anchored, question-extras, manual/pdf);
+  every pass is covered (answer-anchored, question fallback, manual/pdf);
   dropped terms audited as `extract_denied`; all-denied == a clean []
   (no_disease, no search, no appendix). Harmless by construction: a
   register-absent term has no guideline to find. Gates: больничный ×3
@@ -299,7 +311,6 @@ final answer = raw answer + appendix block (local PDF links only)
   English drift on real diseases are uncovered — a source-text grounding
   gate (extracted disease must occur in question/answer before retrieval)
   is the structural fix candidate.
-  bare-answer fallback — superseded by the question+answer widening above.
 - Output is schema-constrained (structured decoding), temperature 0, small
   token budget.
 - Several diseases may be extracted; each is processed independently

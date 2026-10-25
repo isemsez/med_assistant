@@ -340,7 +340,8 @@ class Pipeline:
         no guideline exists to find. Normalized exact match (lowercase,
         ё->е); dropped terms audited as `extract_denied`. Applied inside
         _extract_call so EVERY pass is covered: the answer-anchored pass,
-        the question-extras pass, and extract_manual (pdf turns)."""
+        the empty-answer question fallback, and extract_manual (pdf
+        turns)."""
         if not diseases:
             return diseases
         norm = lambda d: d.strip().lower().replace("ё", "е")
@@ -351,13 +352,15 @@ class Pipeline:
             return diseases
         return [d for d in diseases if norm(d) not in prompts.EXTRACT_DENYLIST]
 
-    def _extract_call(self, system, user, manual=False):
+    def _extract_call(self, system, user, manual=False, fallback=False):
         t0 = time.monotonic()
         raw = self._labeler_chat(system, user,
                                  config.LABELER_EXTRACT_MAX_TOKENS,
                                  EXTRACT_SCHEMA)
         if self.audit:
             kw = {"manual": True} if manual else {}
+            if fallback:
+                kw["fallback"] = True
             self.audit.log("labeler_extract", raw=raw,
                            dur_s=round(time.monotonic() - t0, 2), **kw)
         try:
@@ -368,27 +371,27 @@ class Pipeline:
             raise
 
     def _real_extract(self, question, answer):
-        # diseases from BOTH sources (owner decision 2026-10-20): the answer
-        # pass is primary (its diseases must not lose DISEASE_CAP slots), the
-        # question pass reuses the pdf-direct prompt over the bare question
-        # — «включи каждое названное заболевание» sticks where questioning
-        # the same pass's rules failed (probed live). A «Да.» answer to
-        # «А при инсульте?» anchors the stroke guideline; a drifted answer
-        # can no longer silently drop an asked-about disease. Merged
-        # answer-first, exact strings deduped; near-forms (e.g.
-        # гипертония/гипертензия) may stay as rare duplicate groups — select
-        # resolves them to the same card.
+        # answer-anchored; the bare question is a FALLBACK for empty answers
+        # only (owner decision 2026-10-25 evening — back to the e77ef04
+        # principle, now in code instead of a prompt rule the 4B ignored):
+        # the 2026-10-20 both-passes widening cost a second extract call on
+        # EVERY turn and, on near-form questions, a duplicate disease ran
+        # its own search+select («инфаркт миокарда» from the answer +
+        # «инфаркт» from the question, session 98 16:47: five extra group
+        # calls, ~80 s, and the ambiguous short form's stroke pdf 814_1
+        # attached live). The widening's other cover — a drifted non-empty
+        # answer silently dropping an asked-about disease — is given up:
+        # the doctor re-asks it as a separate single-disease question
+        # (owner decision). Empty-after-denylist counts as empty
+        # (all-denied == no_disease, 52f823d); an LLMError in the answer
+        # pass is a transport failure, not emptiness — no fallback, the
+        # turn stops honestly (invalid labeler output is never retried).
         answer_diseases = self._extract_call(prompts.SYSTEM_LABELER_EXTRACT,
                                              _extract_user(question, answer))
-        question_diseases = self._extract_call(
-            prompts.SYSTEM_LABELER_EXTRACT_QUESTION, question)
-        merged = list(answer_diseases)
-        low = {d.lower() for d in merged}
-        for d in question_diseases:
-            if d.lower() not in low:
-                merged.append(d)
-                low.add(d.lower())
-        return merged
+        if answer_diseases:
+            return answer_diseases
+        return self._extract_call(prompts.SYSTEM_LABELER_EXTRACT_QUESTION,
+                                  question, fallback=True)
 
     def extract_manual(self, payload):
         """Labeler 1 in direct mode: parse a doctor-typed «pdf » payload

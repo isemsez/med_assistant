@@ -1289,27 +1289,50 @@ class TestPromptSilence(unittest.TestCase):
                 continue
             self.assertIn(term, body)
 
-    def test_extract_two_pass_merge_answer_first(self):
-        # owner decision 2026-10-20: diseases from both sources — the
-        # answer-anchored pass first, the pdf-direct question pass appends
-        # what the answer skipped («А при инсульте?» -> «Да.», drifted
-        # answers); exact strings deduped
+    def test_extract_answer_pass_short_circuits(self):
+        # owner decision 2026-10-25 evening: the bare-question pass is a
+        # FALLBACK for empty answers only — a non-empty answer-anchored
+        # extraction is the whole result, the question pass never runs
+        # (speed: one extract call on a normal turn; near-form duplicates
+        # like «инфаркт миокарда»+«инфаркт» no longer double the machinery)
+        from medassistant import prompts
         pipe = make_pipe()
+        calls = []
 
-        def fake_call(system, user, manual=False):
-            from medassistant import prompts
-            if system is prompts.SYSTEM_LABELER_EXTRACT:
-                self.assertIn("Ответ ассистента", user)
-                return ["артериальная гипертензия"]
-            self.assertIs(system, prompts.SYSTEM_LABELER_EXTRACT_QUESTION)
-            self.assertNotIn("Ответ ассистента", user)
-            return ["гипертония", "диабет", "диабет"]
+        def fake_call(system, user, manual=False, fallback=False):
+            calls.append(system)
+            self.assertIs(system, prompts.SYSTEM_LABELER_EXTRACT)
+            self.assertIn("Ответ ассистента", user)
+            return ["артериальная гипертензия"]
 
         pipe._extract_call = fake_call
         self.assertEqual(
             pipe._real_extract("Вопрос про гипертонию и диабет?",
                                "Ответ про гипертензию."),
-            ["артериальная гипертензия", "гипертония", "диабет"])
+            ["артериальная гипертензия"])
+        self.assertEqual(calls, [prompts.SYSTEM_LABELER_EXTRACT])
+
+    def test_extract_question_fallback_on_empty_answer(self):
+        # «Да.» to «А при инсульте?» — the answer names no disease, the
+        # bare question is analyzed with the direct prompt (the original
+        # 2026-10-20 case, e77ef04, now code-level); the fallback call is
+        # marked so audit rows distinguish it
+        from medassistant import prompts
+        pipe = make_pipe()
+
+        def fake_call(system, user, manual=False, fallback=False):
+            if system is prompts.SYSTEM_LABELER_EXTRACT:
+                self.assertFalse(fallback)
+                return []
+            self.assertIs(system, prompts.SYSTEM_LABELER_EXTRACT_QUESTION)
+            self.assertNotIn("Ответ ассистента", user)
+            self.assertEqual(user, "А при инсульте?")
+            self.assertTrue(fallback)
+            return ["инсульт"]
+
+        pipe._extract_call = fake_call
+        self.assertEqual(pipe._real_extract("А при инсульте?", "Да."),
+                         ["инсульт"])
 
     def test_extract_passes_answer_anchor_prompt(self):
         # the answer pass stays the proven MVP answer-anchor — question-only
@@ -1545,15 +1568,17 @@ class TestExtractDenylist(unittest.TestCase):
 
     def test_every_extract_pass_filtered(self):
         # the filter lives in _extract_call, so BOTH _real_extract passes
-        # (answer-anchored + question-extras) go through it
+        # go through it: the answer pass here is denied down to [] and the
+        # empty-answer FALLBACK pass must be filtered too (2026-10-25
+        # fallback semantics)
         from medassistant import prompts
         pipe = make_pipe()
 
         def fake_chat(system, user, max_tokens, schema):
-            if system is prompts.SYSTEM_LABELER_EXTRACT_QUESTION:
-                return '{"diseases": ["синдром Марфана"]}'
+            if system is prompts.SYSTEM_LABELER_EXTRACT:
+                return '{"diseases": ["Marfan syndrome"]}'
             return ('{"diseases": ["инфаркт миокарда",'
-                    ' "Marfan syndrome"]}')
+                    ' "синдром Марфана"]}')
         pipe._labeler_chat = fake_chat
         self.assertEqual(pipe._real_extract("вопрос", "ответ"),
                          ["инфаркт миокарда"])
