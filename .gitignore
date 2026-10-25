@@ -16,7 +16,7 @@ logs/
 .pytest_cache/
 .idea/
 /.kilo/kilo.jsonc
-.kilo/plans/
+.*/plans/
 models/*.gguf
 python/
 engine/
