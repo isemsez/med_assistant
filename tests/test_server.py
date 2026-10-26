@@ -266,7 +266,7 @@ class TestChat(Base):
         ]
         sid, events = self.chat()
         self.assertIn(("reasoning_reset",
-                       {"note": "Прерываю размышления — перезапускаю."}),
+                       {"note": "Зациклились размышления — перезапускаю."}),
                       events)
         # reasoning before a reset is cleared (client-side semantics): only
         # post-reset reasoning counts (owner decision 2026-10-14)
@@ -289,10 +289,10 @@ class TestChat(Base):
         # the fatal loop's garbage is dropped with its own note before the
         # honest failure (owner report 2026-10-14)
         self.assertIn(("reasoning_reset",
-                       {"note": "Прерываю размышления — генерация "
+                       {"note": "Зациклились размышления — генерация "
                                 "прервана."}), events)
         self.assertLess(events.index(("reasoning_reset",
-                                      {"note": "Прерываю размышления — "
+                                      {"note": "Зациклились размышления — "
                                                "генерация прервана."})),
                         names.index("error"))
         self.assertIn("error", names)

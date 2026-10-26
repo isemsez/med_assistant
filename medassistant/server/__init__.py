@@ -437,7 +437,7 @@ def chat(req: ChatRequest):
                         # is visible (owner report 2026-10-14)
                         reasoning_parts, prefix[0] = [], ""
                         yield _sse("reasoning_reset", {
-                            "note": "Прерываю размышления — перезапускаю."})
+                            "note": "Зациклились размышления — перезапускаю."})
                     else:
                         parts.append(event["text"])
                         yield _sse("token", {"t": event["text"]})
@@ -451,7 +451,7 @@ def chat(req: ChatRequest):
                     # the retry looped again — drop the looped garbage and say
                     # why the thinking block is empty before the honest failure
                     yield _sse("reasoning_reset", {
-                        "note": "Прерываю размышления — генерация прервана."})
+                        "note": "Зациклились размышления — генерация прервана."})
                 yield _sse("error", {"text": "Сбой генерации ответа."})
             finally:
                 # a cooperative stop breaks mid-stream: closing the generator

@@ -470,7 +470,7 @@ canary`, then `python -m medassistant regression` (both live, minutes on CPU).
   the CPU — and retries once with `frequency_penalty`
   (`LOOP_RETRY_FREQ_PENALTY`, only knob family `LOOP_*` in `.env`; the UI
   gets `reasoning_reset`, drops the looped thinking and shows a
-  «Прерываю размышления — …» note; a fatal second loop's garbage is
+  «Зациклились размышления — …» note; a fatal second loop's garbage is
   dropped with a note too). A second loop or an empty retry fails with
   «Сбой генерации ответа»; audit rows: `answerer_loop_abort`,
   `stage_stop stop_stage=answerer` — both also carry `tail`, the last

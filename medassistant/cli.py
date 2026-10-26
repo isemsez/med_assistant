@@ -180,7 +180,7 @@ def cmd_ask(args):
                 sys.stderr.write(event["text"])
                 sys.stderr.flush()
             elif event["type"] == "reasoning_reset":
-                print("(прерываю размышления — перезапуск)", file=sys.stderr)
+                print("(зациклились размышления — перезапуск)", file=sys.stderr)
             else:
                 parts.append(event["text"])
                 print(event["text"], end="", flush=True)
