@@ -70,6 +70,35 @@ class TestSelectCache(unittest.TestCase):
         self.assertEqual(c.get("ХСН", "none", "2_1"),
                          {"verdict": "right", "human": True})
 
+    def test_forget_removes_one_pair_only(self):
+        # ↻ (owner decision 2026-10-26 evening): ONE pair becomes unknown —
+        # the next turn's selector re-judges exactly it — while sibling
+        # pairs, other audience buckets and other diseases stay intact
+        c = SelectCache(self.path, self.sha)
+        c.put_machine("ХСН", "none", {"2_1": "right", "1_1": "wrong"})
+        c.negate("ХСН", "none", "3_1", "right")  # human — goes the same way
+        c.put_machine("ХСН", "child", {"2_1": "right"})
+        c.put_machine("Грипп", "none", {"9_1": "right"})
+        self.assertTrue(c.forget("ХСН", "none", "2_1"))
+        self.assertIsNone(c.get("ХСН", "none", "2_1"))
+        self.assertEqual(c.get("ХСН", "none", "1_1"), {"verdict": "wrong"})
+        self.assertEqual(c.get("ХСН", "none", "3_1"),
+                         {"verdict": "wrong", "human": True})
+        self.assertEqual(c.get("ХСН", "child", "2_1"), {"verdict": "right"})
+        self.assertEqual(c.get("Грипп", "none", "9_1"), {"verdict": "right"})
+        # persisted: a fresh load sees the same state
+        self.assertIsNone(SelectCache(self.path, self.sha)
+                          .get("ХСН", "none", "2_1"))
+        self.assertFalse(c.forget("ХСН", "none", "2_1"),
+                         "forgetting an unknown pair is a no-op")
+
+    def test_forget_last_pair_prunes_empty_buckets(self):
+        c = SelectCache(self.path, self.sha)
+        c.put_machine("ХСН", "none", {"2_1": "right"})
+        self.assertTrue(c.forget("ХСН", "none", "2_1"))
+        self.assertEqual(c.all_verdicts(), {},
+                         "no empty disease/bucket skeletons linger")
+
     def test_all_verdicts_is_a_copy(self):
         c = SelectCache(self.path, self.sha)
         c.put_machine("ХСН", "none", {"2_1": "right"})

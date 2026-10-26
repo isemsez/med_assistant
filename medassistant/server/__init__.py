@@ -59,8 +59,8 @@ class VerdictRequest(BaseModel):
     disease: str
     audience: str = "none"  # none | child | adult | child,adult (row payload)
     code_version: str
-    current: str  # right | wrong — the zone the row is displayed in
-    action: str   # negate (👎 toggle) | confirm (👍 one-time)
+    current: str = ""  # right | wrong — the zone the row is displayed in
+    action: str   # negate (👎 toggle) | confirm (👍 one-time) | forget (↻)
 
 
 class Turn:
@@ -214,14 +214,23 @@ def post_verdict(req: VerdictRequest):
     negates the pair's current verdict (toggle attached/grayed), 👍
     confirms it once; after any click the pair is human-revised and
     machine writes never overwrite it. Legacy rows whose pair was never
-    cached are materialized from the displayed zone (`current`)."""
+    cached are materialized from the displayed zone (`current`). ↻
+    (owner decision 2026-10-26 evening) FORGETS one pair — its verdict is
+    removed and the next turn's live selector re-judges exactly it, every
+    other pair of the disease keeps its verdict."""
     cache = app.state.pipe.select_cache
     if cache is None:
         raise HTTPException(503, "select cache disabled")
+    if req.action == "forget":
+        removed = cache.forget(req.disease, req.audience, req.code_version)
+        app.state.audit.log("select_verdict", action="forget",
+                            disease=req.disease, audience=req.audience,
+                            code_version=req.code_version, removed=removed)
+        return {"removed": removed}
     if req.current not in ("right", "wrong") or \
             req.action not in ("negate", "confirm"):
         raise HTTPException(400, "current must be right|wrong, "
-                                 "action must be negate|confirm")
+                                 "action must be negate|confirm|forget")
     entry = (cache.negate if req.action == "negate" else cache.confirm)(
         req.disease, req.audience, req.code_version, req.current)
     app.state.audit.log("select_verdict", action=req.action,

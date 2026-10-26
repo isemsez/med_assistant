@@ -128,6 +128,12 @@ attached/grayed), 👍 (never-revised pairs only) confirms it, any click
 makes the pair human-revised (only 👎 remains) and is never overwritten
 by machine writes (`POST /api/verdicts`, audit `select_verdict`; the UI
 renders rows per CURRENT verdicts, stored payloads are never rewritten);
+every cached row also carries ↻ (owner decision 2026-10-26 evening,
+replacing a whole-bucket drop): forgetting ONE pair makes it unknown
+again — the next question's live selector re-judges exactly it while
+every other pair of the disease keeps its verdict (partial coverage);
+the row falls back to its payload zone and shows «· переоценю заново»
+until the re-judge freezes a fresh verdict;
 a looped select group's pairs are never frozen. Only turns with a
 session id read/write the cache — regression, canary and plain CLI runs
 bypass it entirely (the loop-canary golden keeps exercising the live

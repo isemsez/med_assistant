@@ -875,6 +875,32 @@ class TestVerdicts(unittest.TestCase):
         self.assertEqual(self._post(current="maybe").status_code, 400)
         self.assertEqual(self._post(action="like").status_code, 400)
 
+    def test_forget_action(self):
+        # ↻ (owner decision 2026-10-26 evening): action=forget removes ONE
+        # pair's verdict — no `current` needed — and the next turn's live
+        # selector re-judges exactly it; siblings stay cached
+        self._post()                                  # seeds 2_1 human-wrong
+        self._post(code_version="1_1", current="right",
+                   action="confirm")                  # seeds 1_1 human-right
+        r = self._post(action="forget")              # `current` stays ""
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"removed": True})
+        entries = self.client.get("/api/verdicts").json()["entries"]
+        self.assertNotIn("2_1", entries["хсн"]["none"])
+        self.assertEqual(entries["хсн"]["none"]["1_1"],
+                         {"verdict": "right", "human": True})
+        rows = [json.loads(l) for l in
+                Path(os.environ["AUDIT_LOG"]).read_text(encoding="utf-8")
+                .splitlines() if l.strip()]
+        row = [r_ for r_ in rows
+               if r_["stage"] == "select_verdict"
+               and r_["action"] == "forget"][-1]
+        self.assertEqual(row["code_version"], "2_1")
+        self.assertEqual(row["removed"], True)
+        # forgetting an unknown pair is an honest no-op
+        self.assertEqual(self._post(action="forget").json(),
+                         {"removed": False})
+
     def test_disabled_cache(self):
         pipe = FakePipe()  # no select_cache -> feature off
         client, cm = make_client(pipe)

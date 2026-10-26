@@ -132,6 +132,30 @@ class SelectCache:
             self._save()
             return dict(entry)
 
+    def forget(self, disease, bucket, code_version):
+        """↻ (owner decision 2026-10-26 evening, replacing the whole-bucket
+        drop): remove ONE pair's verdict — the pair becomes unknown again
+        and the next turn's live selector re-judges exactly it (partial
+        coverage: cached pairs keep their verdicts, only the unknowns are
+        judged). Machine or human, it goes the same way — the owner asked
+        for the re-judge. Returns True when an entry was removed."""
+        with self._lock:
+            key = norm_disease(disease)
+            buckets = self._entries.get(key)
+            if not buckets:
+                return False
+            bkey = _norm_bucket(bucket)
+            pairs = buckets.get(bkey)
+            if not pairs or code_version not in pairs:
+                return False
+            del pairs[code_version]
+            if not pairs:
+                buckets.pop(bkey, None)
+                if not buckets:
+                    self._entries.pop(key, None)
+            self._save()
+            return True
+
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {"docs_meta_sha1": self.docs_sha1, "entries": self._entries}

@@ -145,13 +145,20 @@ function noteNode(text, isError, anchor) {
 // (GET /api/verdicts) decides each row's zone and button set, so a
 // revision is visible on old turns too; the stored payload is never
 // rewritten — history stays as it shipped, the cache changes the future.
-const verdictState = { entries: null };
+// ↻ (owner decision 2026-10-26 evening) forgets ONE pair: its verdict is
+// removed and the next question's live selector re-judges exactly it,
+// every other pair of the disease keeps its verdict.
+const verdictState = { entries: null, forgotten: new Set() };
 
 function normDisease(d) {
   return d.trim().toLowerCase().replace(/ё/g, "е"); // server-side key form
 }
 
+const vKey = (disease, audience, cv) =>
+  `${normDisease(disease)}|${audience || "none"}|${cv}`;
+
 async function refreshVerdicts() {
+  verdictState.forgotten = new Set(); // server is the truth on refetch
   try {
     const r = await fetch("/api/verdicts");
     verdictState.entries = r.ok ? ((await r.json()).entries || {}) : null;
@@ -187,7 +194,11 @@ function renderAppendix(payload, anchor) {
       code_version: c.code_version, name: c.name, url: c.url,
       disease, audience: audience || "none",
       current: v ? v.verdict : zone,
-      human: !!(v && v.human), byline,
+      human: !!(v && v.human),
+      cached: !!v, // ↻ exists only for a pair that has a verdict to forget
+      forgotten: verdictState.forgotten.has(
+        vKey(disease, audience, c.code_version)),
+      byline,
     });
   };
   for (const g of groups) {
@@ -209,7 +220,14 @@ function renderAppendix(payload, anchor) {
       r.human ? "" : `<button type="button" class="vd-btn" data-act="confirm"
         title="Подтвердить: подобрано верно">👍</button>`
     }<button type="button" class="vd-btn" data-act="negate"
-        title="Отклонить подбор (повторное нажатие вернёт)">👎</button></span></li>`;
+        title="Отклонить подбор (повторное нажатие вернёт)">👎</button>${
+      r.forgotten
+        ? `<span class="cand-note">· переоценю заново</span>`
+        : r.cached
+        ? `<button type="button" class="vd-btn" data-act="forget"
+        title="Убрать из кэша — селектор переоценит этот pdf при следующем вопросе">↻</button>`
+        : ""
+    }</span></li>`;
 
   const right = rows.filter((r) => r.current === "right");
   const wrong = rows.filter((r) => r.current === "wrong");
@@ -244,6 +262,33 @@ function renderAppendix(payload, anchor) {
 
 async function reviseVerdict(span, action, wrap, payload, anchor) {
   const { disease, audience, cv, current } = span.dataset;
+  if (action === "forget") {
+    // optimistic: the pair becomes unknown — the row falls back to its
+    // payload zone and shows «переоценю заново»; the next question's
+    // selector re-judges exactly this pair
+    if (verdictState.entries) {
+      const buckets = verdictState.entries[normDisease(disease)];
+      if (buckets && buckets[audience]) delete buckets[audience][cv];
+    }
+    verdictState.forgotten.add(vKey(disease, audience, cv));
+    const fresh = renderAppendix(payload, anchor);
+    if (wrap.parentNode && fresh) wrap.parentNode.replaceChild(fresh, wrap);
+    try {
+      await api("/api/verdicts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ disease, audience,
+          code_version: cv, current, action }),
+      });
+    } catch (e) {
+      noteNode(`Не удалось убрать из кэша: ${e.message}`, true, anchor || null);
+      await refreshVerdicts(); // server remains the truth — redraw from it
+      const again = renderAppendix(payload, anchor);
+      if (fresh && fresh.parentNode && again) {
+        fresh.parentNode.replaceChild(again, fresh);
+      }
+    }
+    return;
+  }
   // optimistic: apply the same transition the server will persist, then
   // re-render the whole block in place (the row moves zones)
   if (!verdictState.entries) verdictState.entries = {};

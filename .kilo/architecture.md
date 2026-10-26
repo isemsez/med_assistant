@@ -631,7 +631,13 @@ with partial or faked results; the answer ships with the honest note.
    turns, while the stored payload is never rewritten — history stays as
    it shipped, the cache changes the future. `POST /api/verdicts` applies
    negate/confirm server-side (audit `select_verdict`); the click is
-   optimistic and re-renders from the server on failure.
+   optimistic and re-renders from the server on failure. Every cached row
+   also carries ↻ (owner decision 2026-10-26 evening, replacing an earlier
+   whole-bucket drop): forgetting ONE pair makes it unknown again — the
+   next question's live selector re-judges exactly it while every other
+   pair of the disease keeps its verdict (partial coverage); the row falls
+   back to its payload zone and shows «· переоценю заново» until the
+   re-judge freezes a fresh verdict.
 
 ## 8. Manual pdf queries
 
