@@ -145,7 +145,8 @@ function noteNode(text, isError, anchor) {
 // (GET /api/verdicts) decides each row's zone and button set, so a
 // revision is visible on old turns too; the stored payload is never
 // rewritten — history stays as it shipped, the cache changes the future.
-// ↻ (owner decision 2026-10-26 evening) forgets ONE pair: its verdict is
+// The «· из кэша» control (owner decision 2026-10-26 evening; text beat a
+// ↻ glyph) forgets ONE pair: its verdict is
 // removed and the next question's live selector re-judges exactly it,
 // every other pair of the disease keeps its verdict.
 const verdictState = { entries: null, forgotten: new Set() };
@@ -195,15 +196,17 @@ function renderAppendix(payload, anchor) {
       disease, audience: audience || "none",
       current: v ? v.verdict : zone,
       human: !!(v && v.human),
-      cached: !!v, // ↻ exists only for a pair that has a verdict to forget
+      cached: !!v, // «из кэша» exists only for a pair that has a verdict to forget
       forgotten: verdictState.forgotten.has(
         vKey(disease, audience, c.code_version)),
       byline,
     });
   };
   for (const g of groups) {
-    const auto = g.auto_pick ? " · автоподбор"
-      : g.cached ? " · из кэша" : "";
+    // cache provenance rides on the per-row «из кэша» control below (a
+    // turn-level marker would duplicate it — on a full hit EVERY pick row
+    // carries the button)
+    const auto = g.auto_pick ? " · автоподбор" : "";
     const byline = ` — по «${esc(g.disease)}»${auto}`;
     for (const p of g.picks || []) addRow(p, g.disease, g.audience, "right", byline);
   }
@@ -224,8 +227,8 @@ function renderAppendix(payload, anchor) {
       r.forgotten
         ? `<span class="cand-note">· переоценю заново</span>`
         : r.cached
-        ? `<button type="button" class="vd-btn" data-act="forget"
-        title="Убрать из кэша — селектор переоценит этот pdf в след.раз">↻</button>`
+        ? `<button type="button" class="vd-btn cachetag" data-act="forget"
+        title="Убрать из кэша — селектор переоценит этот pdf в след.раз">· из кэша</button>`
         : ""
     }</span></li>`;
 

@@ -95,6 +95,10 @@ details.thinking .think-body {
   opacity: 0.45; }
 .sources li:hover .vd-btn { opacity: 0.85; }
 .sources .vd-btn:hover { opacity: 1; }
+/* the per-pair forget control reads as byline text, not an icon button
+   (owner request 2026-10-26 evening: «из кэша» beat the ↻ glyph) */
+.sources .vd-btn.cachetag { font-size: 12.5px; opacity: 0.8;
+  text-decoration: underline dotted; }
 /* provisional candidate list: end-result look (not a warning note), dashed
    border marks it as still being filtered; replaced by the final sources */
 .sources.provisional { border-style: dashed; opacity: 0.9; }

@@ -115,8 +115,8 @@ selection freezes per-pair verdicts — (normalized disease, audience
 bucket none/child/adult from the same markers the audience guard uses) →
 guideline id = right/wrong — into `data/select_cache.yaml`
 (`SELECT_CACHE=0` disables); a later turn whose candidate pairs are all
-covered skips labeler 2 AND auto-pick (stage «Ранее отобрано…», appendix
-marks «из кэша»; the motivation measured in the live log: 81% of select
+covered skips labeler 2 AND auto-pick (stage «Ранее отобрано…», the
+appendix rows carry the «из кэша» control; the motivation measured in the live log: 81% of select
 group runs were exact (session, disease) repeats eating 87% of select
 seconds, and the 4B attached different pdf sets for the same disease on
 consecutive turns); partial coverage attaches cached-right pairs without
@@ -128,8 +128,9 @@ attached/grayed), 👍 (never-revised pairs only) confirms it, any click
 makes the pair human-revised (only 👎 remains) and is never overwritten
 by machine writes (`POST /api/verdicts`, audit `select_verdict`; the UI
 renders rows per CURRENT verdicts, stored payloads are never rewritten);
-every cached row also carries ↻ (owner decision 2026-10-26 evening,
-replacing a whole-bucket drop): forgetting ONE pair makes it unknown
+every cached row also carries a clickable «· из кэша» (owner decision
+2026-10-26 evening, replacing a whole-bucket drop — and preferred over a
+↻ glyph): forgetting ONE pair makes it unknown
 again — the next question's live selector re-judges exactly it while
 every other pair of the disease keeps its verdict (partial coverage);
 the row falls back to its payload zone and shows «· переоценю заново»
