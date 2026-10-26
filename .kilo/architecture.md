@@ -220,7 +220,7 @@ final answer = raw answer + appendix block (local PDF links only)
   2026-10-14). The pipeline then retries once with an anti-repetition
   nudge (`LOOP_RETRY_FREQ_PENALTY`), emitting `reasoning_reset` so the
   UI drops the looped garbage and shows a visible
-  «Зацикливание размышлений — …» note; a second loop or an empty retry
+  «Прерываю размышления — …» note; a second loop or an empty retry
   fails with the honest «Сбой генерации ответа» note (its looped
   garbage is dropped with a note too). Not a semantic retry: the prompt
   and content are untouched, only the sampler is nudged on a turn that
