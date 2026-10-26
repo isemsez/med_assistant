@@ -81,6 +81,11 @@ details.thinking .think-body {
 .sources .cand-toggle:hover { color: var(--accent); }
 .sources .filtered a { color: var(--muted); }
 .sources .filtered { color: var(--muted); }
+/* provisional candidates: decided pairs ship in their decided state
+   (2026-10-26) — wrong-verdict rows gray at once, cached-right rows get a
+   quiet marker; only unmarked rows are actually being filtered */
+.sources .cand-note { color: var(--muted); font-size: 12px; }
+.sources li.cand-ok > a { color: var(--ink); }
 /* pair-verdict revision buttons (owner decision 2026-10-26): 👎 negates
    the pair's current verdict (toggle attached/grayed), 👍 — never-revised
    pairs only — confirms it. Subtle at rest, full contrast on hover */

@@ -823,8 +823,19 @@ class Pipeline:
                     # search is cheap, the labeler call is not: hand the candidate
                     # cards to the UI immediately; it filters them client-side
                     # when the final appendix payload arrives. Retrieval scores
-                    # are display-free: only auto-pick consumes them
-                    yield {"stage": "select", "disease": disease, "cards": cand}
+                    # are display-free: only auto-pick consumes them.
+                    # Decided pairs ship in their DECIDED state (owner catch
+                    # 2026-10-26 evening): a WRONG-verdict pdf — machine-
+                    # filtered or human-disliked — grays out in the
+                    # provisional block at once, a cached-right pair is
+                    # marked already attaching; the doctor's 👎 must be
+                    # visible for the whole select cycle, not only in the
+                    # final appendix. Event copies only — `cand` feeds the
+                    # stored payload and stays unannotated
+                    yield {"stage": "select", "disease": disease,
+                           "cards": [dict(c, verdict=known[c["code_version"]]["verdict"])
+                                     if c["code_version"] in known else c
+                                     for c in cand]}
                     try:
                         picks = cached_right + select(question, raw_answer,
                                                       disease, judged_cards)

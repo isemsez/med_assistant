@@ -662,11 +662,23 @@ async function send(question) {
       followScroll(() => {
         const candWrap = document.createElement("div");
         candWrap.className = "sources provisional";
-        const items = (cards || []).map((c) => `<li>${
-          c.url
-            ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">«${esc(c.name)}» (${esc(c.code_version)})</a>`
-            : `«${esc(c.name)}» (${esc(c.code_version)})`
-        }</li>`).join("");
+        // Decided pairs arrive in their decided state (owner catch
+        // 2026-10-26 evening): a cached WRONG verdict — the doctor's 👎 or
+        // an earlier filter — grays out right here for the whole select
+        // cycle instead of pretending to be reconsidered; a cached RIGHT
+        // pair is already attaching; only the unmarked rows are actually
+        // being filtered
+        const items = (cards || []).map((c) => {
+          const decided = c.verdict === "wrong" ? " filtered"
+            : c.verdict === "right" ? " cand-ok" : "";
+          const mark = c.verdict === "wrong" ? " · отклонено"
+            : c.verdict === "right" ? " · уже отобрано" : "";
+          return `<li class="cand${decided}">${
+            c.url
+              ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">«${esc(c.name)}» (${esc(c.code_version)})</a>`
+              : `«${esc(c.name)}» (${esc(c.code_version)})`
+          }<span class="cand-note">${mark}</span></li>`;
+        }).join("");
         candWrap.innerHTML = `<div class="caption">Кандидаты pdf — фильтрую по «${esc(disease)}»</div>
           <ul>${items}</ul>`;
         insertAfter(candWrap, candAnchor);

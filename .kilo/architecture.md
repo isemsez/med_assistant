@@ -567,7 +567,12 @@ with partial or faked results; the answer ships with the honest note.
    match strength, not a probability of correctness, and showing it as a %
    read as misleading (owner decision 2026-10-04). Scores are internal to
    auto-pick: stored appendix payloads, the labeler-2 prompt, and the SSE
-   candidate cards all stay score-free.
+   candidate cards all stay score-free. Decided pairs (owner catch
+   2026-10-26 evening) stream in their decided state: a WRONG-verdict pdf —
+   a human 👎 or an earlier machine filter — grays out in the provisional
+   block at once instead of pretending to be reconsidered for the whole
+   select cycle, a cached-right pair is marked «уже отобрано»; only the
+   unmarked rows are actually being filtered.
 4. **Auto-pick fast path.** When the top search candidate scores ≥ 0.80 and
    leads the runner-up by ≥ 0.05 (or is the only candidate), labeler call 2
    is skipped and that candidate is taken (marked «автоподбор» in the

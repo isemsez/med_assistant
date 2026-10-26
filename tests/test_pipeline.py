@@ -1750,6 +1750,54 @@ class TestSelectCacheWiring(unittest.TestCase):
                              {"verdict": "wrong"},
                              "the none bucket is untouched")
 
+    def test_provisional_cards_carry_known_verdicts(self):
+        # partial coverage (owner catch 2026-10-26 evening): the candidates
+        # block streamed BEFORE the select must show decided pairs in their
+        # decided state — the 👎'd pair grays at once, the cached-right pair
+        # is marked; only unknowns carry no verdict; the STORED payload
+        # (filtered_out) stays unannotated
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = [{"code_version": "2_1", "name": "ХСН", "score": 0.90},
+                     {"code_version": "1_1", "name": "Грипп", "score": 0.88},
+                     {"code_version": "3_1", "name": "Рак носоглотки",
+                      "score": 0.70}]
+            cache = self._cache(tmp)
+            cache.put_machine("ХСН", "none", {"2_1": "right"})
+            cache.negate("ХСН", "none", "1_1", "right")  # human: wrong
+            called = []
+            pipe = make_pipe(tmp, select_cache=cache,
+                             search_fn=lambda v: list(cards),
+                             select_fn=lambda q, a, d, c:
+                             called.append([x["code_version"] for x in c])
+                             or [])
+            events = list(pipe.iter_appendix(Q, A, session_id=7,
+                                             diseases=["ХСН"]))
+            ev = [e for e in events if e.get("stage") == "select"][0]
+            by_cv = {c["code_version"]: c for c in ev["cards"]}
+            self.assertEqual(by_cv["2_1"].get("verdict"), "right")
+            self.assertEqual(by_cv["1_1"].get("verdict"), "wrong")
+            self.assertNotIn("verdict", by_cv["3_1"])
+            self.assertEqual(called, [["3_1"]], "only the unknown is judged")
+            res = [e for e in events if e.get("stage") == "done"][0]["result"]
+            for f in res.filtered_out:
+                self.assertNotIn("verdict", f, "stored payload stays clean")
+
+    def test_sid_none_select_event_unannotated(self):
+        # the sid bypass covers the streamed cards too — no verdict keys
+        # leak into the event when the cache is not consulted at all
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self._cache(tmp)
+            cache.put_machine("ХСН", "none", {"2_1": "right", "1_1": "wrong"})
+            pipe = make_pipe(tmp, select_cache=cache, select_fn=None)
+            pipe._labeler_chat = (
+                lambda system, user, max_tokens, schema:
+                '{"reasoning": "1. 2_1 — подходит.", "picks": ["2_1"]}')
+            events = list(pipe.iter_appendix(Q, A, session_id=None,
+                                             diseases=["ХСН"]))
+            ev = [e for e in events if e.get("stage") == "select"][0]
+            for c in ev["cards"]:
+                self.assertNotIn("verdict", c)
+
     def test_machine_writes_after_live_select(self):
         with tempfile.TemporaryDirectory() as tmp:
             cache = self._cache(tmp)

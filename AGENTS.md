@@ -151,7 +151,11 @@ the labeler filter runs, the candidate pdf cards stream to the page immediately
 after search (search is cheap, the labeler call is not) and are filtered to the
 verified picks client-side when the appendix payload arrives (cards are
 name+link only — retrieval scores are display-free, consumed by auto-pick
-alone); when one search candidate clearly dominates
+alone); decided pairs stream in their DECIDED state (owner catch 2026-10-26
+evening): a cached-wrong pdf — a 👎 or an earlier filter — grays out in the
+provisional block at once instead of pretending to be reconsidered for the
+whole select cycle, a cached-right pair is marked «уже отобрано», only the
+unmarked rows are actually being filtered; when one search candidate clearly dominates
 (`AUTO_PICK_MIN`/`AUTO_PICK_GAP`, default 0.80/0.05), labeler call 2 is
 skipped and that candidate is auto-picked (marked «автоподбор»); the
 chat auto-follows every stage update while following was on — the follow
