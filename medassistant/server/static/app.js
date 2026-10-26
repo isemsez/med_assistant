@@ -225,7 +225,7 @@ function renderAppendix(payload, anchor) {
         ? `<span class="cand-note">· переоценю заново</span>`
         : r.cached
         ? `<button type="button" class="vd-btn" data-act="forget"
-        title="Убрать из кэша — селектор переоценит этот pdf при следующем вопросе">↻</button>`
+        title="Убрать из кэша — селектор переоценит этот pdf в след.раз">↻</button>`
         : ""
     }</span></li>`;
 
