@@ -15,6 +15,7 @@ DEFAULTS = {
     "DRUGS_DB": "data/drugs.sqlite",
     "DRUG_ALIASES": "data/drug_aliases.yaml",
     "INN_GLOSS": "data/inn_gloss.yaml",
+    "SELECT_CACHE_PATH": "data/select_cache.yaml",
 }
 
 
@@ -49,6 +50,7 @@ CARD_DIR = _path("CARD_DIR")
 DRUGS_DB = _path("DRUGS_DB")
 DRUG_ALIASES_PATH = _path("DRUG_ALIASES")
 INN_GLOSS_PATH = _path("INN_GLOSS")
+SELECT_CACHE_PATH = _path("SELECT_CACHE_PATH")
 
 HISTORY_WINDOW = int(os.environ.get("HISTORY_WINDOW", "6"))
 DISEASE_CAP = int(os.environ.get("DISEASE_CAP", "3"))
@@ -66,6 +68,16 @@ SESSIONS_BACKUP_KEEP = int(os.environ.get("SESSIONS_BACKUP_KEEP", "5"))
 AUTO_PICK = os.environ.get("AUTO_PICK", "1") not in {"0", "false", "no"}
 AUTO_PICK_MIN = float(os.environ.get("AUTO_PICK_MIN", "0.80"))
 AUTO_PICK_GAP = float(os.environ.get("AUTO_PICK_GAP", "0.05"))
+
+# Pair-verdict select cache (owner decision 2026-10-26): every settled
+# selection freezes its per-pair verdicts (disease+audience -> guideline =
+# right/wrong) into data/select_cache.yaml and a later turn whose candidate
+# pairs are all covered skips labeler 2 entirely. Wrong-verdict pairs never
+# attach; the appendix rows carry 👎/👍 revision buttons (a human revision
+# is never overwritten). Only turns with a session id participate —
+# regression, canary and plain CLI runs bypass it (SELECT_CACHE=0 disables;
+# the file is local runtime state, stamped with docs_meta_sha1).
+SELECT_CACHE = os.environ.get("SELECT_CACHE", "1") not in {"0", "false", "no"}
 
 # Patient cards (owner decision 2026-10-06, architecture.md §9): hand-made
 # *.амбулаторная_карта.md files, per-question prompt context, nothing stored.

@@ -80,6 +80,16 @@ details.thinking .think-body {
   text-decoration: underline dotted; }
 .sources .cand-toggle:hover { color: var(--accent); }
 .sources .filtered a { color: var(--muted); }
+.sources .filtered { color: var(--muted); }
+/* pair-verdict revision buttons (owner decision 2026-10-26): 👎 negates
+   the pair's current verdict (toggle attached/grayed), 👍 — never-revised
+   pairs only — confirms it. Subtle at rest, full contrast on hover */
+.sources .vd { white-space: nowrap; }
+.sources .vd-btn { border: 0; background: none; padding: 0 2px; cursor: pointer;
+  font: inherit; font-size: 12px; line-height: 1; color: var(--muted);
+  opacity: 0.45; }
+.sources li:hover .vd-btn { opacity: 0.85; }
+.sources .vd-btn:hover { opacity: 1; }
 /* provisional candidate list: end-result look (not a warning note), dashed
    border marks it as still being filtered; replaced by the final sources */
 .sources.provisional { border-style: dashed; opacity: 0.9; }

@@ -1597,3 +1597,198 @@ class TestExtractDenylist(unittest.TestCase):
             self.assertEqual(result.status, "no_disease")
             stages = [r["stage"] for r in self._rows(tmp)]
             self.assertNotIn("search", stages)   # never reached retrieval
+
+
+class TestSelectCacheWiring(unittest.TestCase):
+    """Pair-verdict cache (owner decision 2026-10-26): a settled selection
+    freezes per-pair verdicts keyed (disease, audience bucket); a fully
+    covered disease skips labeler 2 entirely; a WRONG pair never attaches
+    (it renders grayed among the filtered-out candidates); only
+    session-carrying turns read or write (regression/canary/CLI bypass);
+    looped groups are never frozen."""
+
+    def _cache(self, tmp):
+        from medassistant.select_cache import SelectCache
+        return SelectCache(Path(tmp) / "select_cache.yaml", "stamp")
+
+    def _run(self, pipe, sid=7, question=Q, answer=A, disease="ХСН"):
+        events = list(pipe.iter_appendix(question, answer, session_id=sid,
+                                         diseases=[disease]))
+        res = [e for e in events if e.get("stage") == "done"][0]["result"]
+        return res, [e.get("stage") for e in events if e.get("stage") != "done"]
+
+    def test_sid_none_bypasses_read_and_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self._cache(tmp)
+            cache.put_machine("ХСН", "none", {"2_1": "right", "1_1": "wrong"})
+            called = []
+            pipe = make_pipe(tmp, select_cache=cache,
+                             select_fn=lambda q, a, d, c:
+                             called.append([x["code_version"] for x in c])
+                             or ["2_1"])
+            res, _ = self._run(pipe, sid=None)
+            self.assertEqual(called, [["2_1", "1_1"]],
+                             "no sid -> full live select, cache ignored")
+            self.assertEqual(cache.get("ХСН", "none", "2_1"),
+                             {"verdict": "right"},
+                             "no sid -> nothing rewritten")
+
+    def test_full_coverage_hit_skips_labeler_and_autopick(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self._cache(tmp)
+            cache.put_machine("ХСН", "none", {"2_1": "right", "1_1": "wrong"})
+            called = []
+            pipe = make_pipe(tmp, select_cache=cache,
+                             select_fn=lambda q, a, d, c:
+                             called.append(1) or ["2_1"])
+            res, stages = self._run(pipe)
+            self.assertEqual(called, [], "labeler 2 must not run")
+            self.assertIn("select_cache", stages)
+            self.assertNotIn("select", stages)
+            self.assertNotIn("auto_pick", stages)
+            g = res.by_disease[0]
+            self.assertEqual([p["code_version"] for p in g["picks"]], ["2_1"])
+            self.assertTrue(g["cached"])
+            self.assertEqual(g["audience"], "none")
+            self.assertEqual([(c["code_version"], c["audience"])
+                              for c in res.filtered_out],
+                             [("1_1", "none")], "wrong pair shows grayed")
+
+    def test_partial_coverage_selects_unknowns_only_and_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = [{"code_version": "2_1", "name": "ХСН", "score": 0.90},
+                     {"code_version": "1_1", "name": "Грипп", "score": 0.84},
+                     {"code_version": "3_1", "name": "Рак носоглотки",
+                      "score": 0.83}]
+            cache = self._cache(tmp)
+            cache.put_machine("ХСН", "none", {"2_1": "right"})
+            called = []
+            pipe = make_pipe(tmp, select_cache=cache,
+                             search_fn=lambda v: list(cards),
+                             select_fn=lambda q, a, d, c:
+                             called.append([x["code_version"] for x in c])
+                             or ["1_1"])
+            res, stages = self._run(pipe)
+            self.assertEqual(called, [["1_1", "3_1"]],
+                             "only unknown pairs are judged")
+            self.assertIn("select", stages)
+            self.assertEqual([p["code_version"] for p in
+                              res.by_disease[0]["picks"]],
+                             ["2_1", "1_1"],
+                             "cached-right pair attaches without judging")
+            self.assertEqual(cache.get("ХСН", "none", "1_1"),
+                             {"verdict": "right"})
+            self.assertEqual(cache.get("ХСН", "none", "3_1"),
+                             {"verdict": "wrong"})
+
+    def test_human_wrong_vetoes_dominant_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = [{"code_version": "2_1", "name": "ХСН", "score": 0.95},
+                     {"code_version": "1_1", "name": "Грипп", "score": 0.70}]
+            cache = self._cache(tmp)
+            cache.negate("ХСН", "none", "2_1", "right")  # human: wrong
+            called = []
+            pipe = make_pipe(tmp, select_cache=cache,
+                             search_fn=lambda v: list(cards),
+                             select_fn=lambda q, a, d, c:
+                             called.append([x["code_version"] for x in c])
+                             or [])
+            res, stages = self._run(pipe)
+            self.assertIn("select", stages)
+            self.assertNotIn("auto_pick", stages,
+                             "the vetoed top-1 must not auto-attach")
+            self.assertEqual(called, [["1_1"]])
+            self.assertEqual(res.by_disease, [])
+            self.assertEqual([c["code_version"] for c in res.filtered_out],
+                             ["2_1", "1_1"],
+                             "the disliked pair stays visible, grayed")
+            self.assertEqual(cache.get("ХСН", "none", "2_1"),
+                             {"verdict": "wrong", "human": True},
+                             "machine write must not overwrite the human")
+
+    def test_looped_group_not_frozen(self):
+        import json as _json
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self._cache(tmp)
+            raw = ('{"reasoning": "1. 2_1 — ХСН — подходит. '
+                   '2. 2_1 — ХСН — подходит. 3. 2_1 — ХСН — подходит.", '
+                   '"picks": ["2_1"]}')
+            pipe = make_pipe(tmp, select_cache=cache, select_fn=None)
+            pipe._labeler_chat = (
+                lambda system, user, max_tokens, schema: raw)
+            res, _ = self._run(pipe)
+            self.assertEqual(res.status, "ok")
+            rows = [_json.loads(l) for l in
+                    (Path(tmp) / "audit.jsonl").read_text(
+                        encoding="utf-8").splitlines() if l.strip()]
+            self.assertTrue([r for r in rows
+                             if r["stage"] == "labeler_select_loop"])
+            self.assertIsNone(cache.get("ХСН", "none", "2_1"),
+                              "a degenerate judgment must not freeze")
+            self.assertIsNone(cache.get("ХСН", "none", "1_1"))
+
+    def test_audience_bucket_in_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self._cache(tmp)
+            cache.put_machine("ХСН", "none", {"2_1": "right", "1_1": "wrong"})
+            called = []
+            pipe = make_pipe(tmp, select_cache=cache,
+                             select_fn=lambda q, a, d, c:
+                             called.append(1) or ["2_1"])
+            res, stages = self._run(
+                pipe, question="Что при ХСН у ребёнка?",
+                answer="Ответ про ХСН.")
+            self.assertEqual(called, [1],
+                             "the none-bucket verdicts must NOT be consumed "
+                             "under the child key — select runs live")
+            self.assertNotIn("select_cache", stages)
+            self.assertEqual(res.by_disease[0]["audience"], "child")
+            self.assertEqual(cache.get("ХСН", "child", "2_1"),
+                             {"verdict": "right"},
+                             "the live turn froze verdicts under child")
+            self.assertEqual(cache.get("ХСН", "none", "1_1"),
+                             {"verdict": "wrong"},
+                             "the none bucket is untouched")
+
+    def test_machine_writes_after_live_select(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self._cache(tmp)
+            pipe = make_pipe(tmp, select_cache=cache,
+                             select_fn=lambda q, a, d, c: ["2_1"])
+            self._run(pipe)
+            self.assertEqual(cache.get("ХСН", "none", "2_1"),
+                             {"verdict": "right"})
+            self.assertEqual(cache.get("ХСН", "none", "1_1"),
+                             {"verdict": "wrong"})
+
+    def test_auto_pick_turn_writes_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = [{"code_version": "2_1", "name": "ХСН", "score": 0.90},
+                     {"code_version": "1_1", "name": "Грипп", "score": 0.70}]
+            cache = self._cache(tmp)
+            called = []
+            pipe = make_pipe(tmp, select_cache=cache,
+                             search_fn=lambda v: list(cards),
+                             select_fn=lambda q, a, d, c:
+                             called.append(1) or [])
+            res, stages = self._run(pipe)
+            self.assertIn("auto_pick", stages)
+            self.assertEqual(called, [])
+            self.assertEqual(cache.get("ХСН", "none", "2_1"),
+                             {"verdict": "right"})
+            self.assertEqual(cache.get("ХСН", "none", "1_1"),
+                             {"verdict": "wrong"})
+
+    def test_cache_disabled_is_byte_identical_path(self):
+        # cache=None (SELECT_CACHE=0) must leave the classic flow intact:
+        # select sees the full card list, no select_cache stage, no write
+        with tempfile.TemporaryDirectory() as tmp:
+            called = []
+            pipe = make_pipe(tmp,
+                             select_fn=lambda q, a, d, c:
+                             called.append([x["code_version"] for x in c])
+                             or ["2_1"])
+            res, stages = self._run(pipe)
+            self.assertEqual(called, [["2_1", "1_1"]])
+            self.assertNotIn("select_cache", stages)
+            self.assertFalse(res.by_disease[0]["cached"])

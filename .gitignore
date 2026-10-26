@@ -8,6 +8,7 @@ data/clinrec_minzdrav/
 data/sessions.sqlite
 data/sessions.sqlite-shm
 data/sessions.sqlite-wal
+data/select_cache.yaml
 data/drugs.sqlite
 *grls.xlsx
 

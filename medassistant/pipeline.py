@@ -214,7 +214,7 @@ class Pipeline:
     def __init__(self, docs=None, index=None, abbr_map=None, audit=None,
                  candidate=None, labeler=None, embed=None,
                  extract_fn=None, search_fn=None, select_fn=None,
-                 clinrec_dir=None):
+                 clinrec_dir=None, select_cache=None):
         self.docs = docs
         self.index = index
         self.abbr_map = abbr_map
@@ -226,6 +226,7 @@ class Pipeline:
         self.extract_fn = extract_fn
         self.search_fn = search_fn
         self.select_fn = select_fn
+        self.select_cache = select_cache
 
     # -- answerer ---------------------------------------------------------
 
@@ -407,7 +408,7 @@ class Pipeline:
             self.index = load_index()
         return self.index.search(variants, self.embed, top_k=config.TOP_K)
 
-    def _real_select(self, question, answer, disease, cards):
+    def _real_select(self, question, answer, disease, cards, looped_out=None):
         """One select call PER RECOMMENDATION TITLE GROUP (owner decision
         2026-10-21): the 4B cannot enumerate a 5-candidate mixed list
         without degenerating (live: echo loops 3/3, cyclic enumerations),
@@ -416,7 +417,9 @@ class Pipeline:
         the pair would hide the twin (owner constraint); different
         recommendations are judged in separate short calls. Picks are
         unioned; a looped or invalid group fails only itself, and the
-        title guard remains the net over the union."""
+        title guard remains the net over the union. `looped_out` (a list)
+        collects the ids of groups whose reasoning looped — the verdict
+        cache must not freeze a degenerate judgment (owner 2026-10-26)."""
         # no answer -> a manual pdf turn: the direct prompt matches what the
         # user message actually contains (no «ответ ассистента» section)
         system = (prompts.SYSTEM_LABELER_SELECT_DIRECT if not answer
@@ -427,10 +430,11 @@ class Pipeline:
         picked = []
         for group in groups.values():
             picked += self._select_group(system, question, answer, disease,
-                                         group)
+                                         group, looped_out=looped_out)
         return picked
 
-    def _select_group(self, system, question, answer, disease, group):
+    def _select_group(self, system, question, answer, disease, group,
+                      looped_out=None):
         """One labeler call over one title group (see _real_select)."""
         t0 = time.monotonic()
         # per-call schema (owner decision 2026-10-18, llama.cpp port): the
@@ -518,6 +522,8 @@ class Pipeline:
         # and the title guard still contribute.
         loop_reason = _select_reasoning_loop(r)
         if loop_reason:
+            if looped_out is not None:
+                looped_out.extend(ids)
             if self.audit:
                 self.audit.log("labeler_select_loop", disease=disease,
                                group=ids, reason=loop_reason, dropped=out)
@@ -531,8 +537,24 @@ class Pipeline:
     # versions — the doctor chooses himself; any marker (child OR adult
     # wording) means the turn states its audience and the guard stands
     # down, leaving the choice to the selector's rule 4
-    _AUDIENCE_MARKERS = ("ребен", "ребён", "детск", "младен", "новорожд",
-                         "подростк", "педиатр", "взросл")
+    _CHILD_MARKERS = ("ребен", "ребён", "детск", "младен", "новорожд",
+                      "подростк", "педиатр")
+
+    def _audience_bucket(self, question, answer):
+        """Which audience words the turn names: "none" | "child" | "adult" |
+        "child,adult" — the same marker family the audience guard stands
+        down on (owner doctrine 2026-10-21). Part of the pair-verdict cache
+        key (owner decision 2026-10-26): a «а у ребёнка?» follow-up must
+        judge under its own key, not reuse the adult-flow verdict — with
+        the register's same-NAME adult/pediatric pairs, audience is the
+        one piece of turn context that legitimately changes the answer."""
+        text = f"{question} {answer or ''}".lower()
+        found = []
+        if any(m in text for m in self._CHILD_MARKERS):
+            found.append("child")
+        if "взросл" in text:
+            found.append("adult")
+        return ",".join(found) if found else "none"
 
     def _audience_complete(self, question, answer, cards, picks):
         """Complete a half-picked adult/pediatric pair (owner doctrine
@@ -543,8 +565,7 @@ class Pipeline:
         the missing side's best-scored twin is added. Fires only with
         ZERO audience markers in question+answer; «Взрослые, дети» docs
         cover both audiences and never need completion."""
-        text = f"{question} {answer or ''}".lower()
-        if any(m in text for m in self._AUDIENCE_MARKERS):
+        if self._audience_bucket(question, answer) != "none":
             return picks, None
         by_title = {}
         for c in cards:
@@ -670,7 +691,20 @@ class Pipeline:
                            dropped=dropped, cap=config.DISEASE_CAP)
 
         search = search_fn or self.search_fn or (lambda variants: self._real_search(variants))
-        select = select_fn or self.select_fn or (lambda q, a, d, c: self._real_select(q, a, d, c))
+        # pair-verdict cache (owner decision 2026-10-26): only turns with a
+        # session id participate — regression, canary and plain CLI runs
+        # pass none, so they always exercise the live selector (the golden
+        # loop canary demands it) and never write verdicts
+        cache = (self.select_cache
+                 if self.select_cache is not None and session_id is not None
+                 else None)
+        bucket = self._audience_bucket(question, raw_answer)
+        looped_ids = []  # this turn's groups whose select reasoning looped
+        if select_fn is not None or self.select_fn is not None:
+            select = select_fn or self.select_fn
+        else:
+            def select(q, a, d, c):
+                return self._real_select(q, a, d, c, looped_out=looped_ids)
 
         for disease in processed:
             # [3] tool — guideline search
@@ -742,38 +776,81 @@ class Pipeline:
                     [{"code_version": c["code_version"],
                       "name": c["name"]} for c in cards])
 
+            # pair-verdict lookup (owner decision 2026-10-26): a known
+            # RIGHT pair attaches without judging, a known WRONG pair
+            # (machine-filtered or human-disliked) never attaches — it
+            # still renders grayed among the filtered-out candidates;
+            # only unknown pairs still need a judgment this turn
+            known = {}
+            if cache is not None:
+                for c in cards:
+                    v = cache.get(disease, bucket, c["code_version"])
+                    if v:
+                        known[c["code_version"]] = v
+                if self.audit:
+                    self.audit.log("select_cache", disease=disease,
+                                   session_id=session_id,
+                                   hit=len(known) == len(cards),
+                                   known=len(known), total=len(cards))
+            attachable = [c for c in cards
+                          if known.get(c["code_version"],
+                                       {}).get("verdict") != "wrong"]
+            judged_cards = [c for c in cards
+                            if c["code_version"] not in known]
+            cached_right = [c["code_version"] for c in attachable
+                            if known.get(c["code_version"],
+                                         {}).get("verdict") == "right"]
+
             # [4] labeler 2 — selection, or auto-pick on a dominant candidate
-            auto_card = self._auto_pick(cards)
-            if auto_card is not None:
-                yield {"stage": "auto_pick", "disease": disease,
-                       "code_version": auto_card["code_version"]}
-                picks, auto = [auto_card["code_version"]], True
+            cached_hit = cache is not None and not judged_cards
+            ran_select = False
+            auto = False
+            if cached_hit:
+                # full coverage: every candidate pair carries a verdict, the
+                # selection is fully determined — no labeler call, no score
+                # check (the measured win: 81% of live select runs were
+                # exact (session, disease) repeats, 87% of select seconds)
+                yield {"stage": "select_cache", "disease": disease}
+                picks = list(cached_right)
             else:
-                # search is cheap, the labeler call is not: hand the candidate
-                # cards to the UI immediately; it filters them client-side
-                # when the final appendix payload arrives. Retrieval scores
-                # are display-free: only auto-pick consumes them
-                yield {"stage": "select", "disease": disease, "cards": cand}
-                try:
-                    picks = select(question, raw_answer, disease, cards)
-                except llm.LLMError as e:
-                    if self.audit:
-                        self.audit.log("stage_stop", stop_stage="labeler_select",
-                                       disease=disease, session_id=session_id,
-                                       error=str(e))
-                    yield {"stage": "done", "result": AppendixResult(
-                        "select_error", diseases=processed, dropped=dropped,
-                        by_disease=by_disease,
-                        notes=notes + [appendix.NOTE_SELECT_ERROR])}
-                    return
-                auto = False
-                picks, guarded = self._title_guard(disease, cards, picks)
+                auto_card = self._auto_pick(judged_cards)
+                if auto_card is not None:
+                    yield {"stage": "auto_pick", "disease": disease,
+                           "code_version": auto_card["code_version"]}
+                    picks = cached_right + [auto_card["code_version"]]
+                    auto = True
+                else:
+                    # search is cheap, the labeler call is not: hand the candidate
+                    # cards to the UI immediately; it filters them client-side
+                    # when the final appendix payload arrives. Retrieval scores
+                    # are display-free: only auto-pick consumes them
+                    yield {"stage": "select", "disease": disease, "cards": cand}
+                    try:
+                        picks = cached_right + select(question, raw_answer,
+                                                      disease, judged_cards)
+                    except llm.LLMError as e:
+                        if self.audit:
+                            self.audit.log("stage_stop", stop_stage="labeler_select",
+                                           disease=disease, session_id=session_id,
+                                           error=str(e))
+                        yield {"stage": "done", "result": AppendixResult(
+                            "select_error", diseases=processed, dropped=dropped,
+                            by_disease=by_disease,
+                            notes=notes + [appendix.NOTE_SELECT_ERROR])}
+                        return
+                    ran_select = True
+            if cached_hit or ran_select:
+                # deterministic, context-aware guards run on every judged or
+                # cached path (not on auto-pick — unchanged 2026-10-20
+                # semantics); a WRONG-verdict twin is not attachable, so a
+                # human-disliked guideline is never rescued back in
+                picks, guarded = self._title_guard(disease, attachable, picks)
                 if guarded and self.audit:
                     self.audit.log("select_title_guard", disease=disease,
                                    session_id=session_id, code_version=guarded,
                                    picks=picks)
                 picks, completed = self._audience_complete(
-                    question, raw_answer, cards, picks)
+                    question, raw_answer, attachable, picks)
                 if completed and self.audit:
                     self.audit.log("select_audience_complete",
                                    disease=disease, session_id=session_id,
@@ -781,20 +858,39 @@ class Pipeline:
             if self.audit:
                 self.audit.log("picks", disease=disease, session_id=session_id,
                                picks=picks, auto=auto)
+            if cache is not None and not cached_hit:
+                # freeze this turn's judgment as machine verdicts: the picked
+                # union post-guards is right, the rest wrong; a looped group
+                # contributes nothing (a degenerate judgment must not freeze
+                # — those pairs stay unknown and are re-judged next turn);
+                # SelectCache itself never overwrites a human revision
+                looped = set(looped_ids)
+                looped_ids.clear()
+                picked = set(picks)
+                cache.put_machine(disease, bucket, {
+                    c["code_version"]:
+                        "right" if c["code_version"] in picked else "wrong"
+                    for c in cards if c["code_version"] not in looped})
 
             resolved = (appendix.resolve_picks(picks, self.docs, self.clinrec_dir)
                         if self.docs else [])
             if resolved:
-                by_disease.append({"disease": disease, "picks": resolved,
-                                   "auto_pick": auto})
+                # `audience` keys the row's revision buttons (owner
+                # 2026-10-26); `cached` marks a no-call turn in the
+                # appendix («из кэша»)
+                by_disease.append({"disease": disease, "audience": bucket,
+                                   "picks": resolved, "auto_pick": auto,
+                                   "cached": cached_hit})
             cand_by_disease.append((disease, cand))
 
         appendix_text = appendix.render_appendix(by_disease)
+        filtered_out = appendix.filtered_out(by_disease, cand_by_disease)
+        for f in filtered_out:
+            f["audience"] = bucket
         result = AppendixResult("ok", diseases=processed, dropped=dropped,
                                 by_disease=by_disease, notes=notes,
                                 appendix_text=appendix_text,
-                                filtered_out=appendix.filtered_out(
-                                    by_disease, cand_by_disease))
+                                filtered_out=filtered_out)
         if self.audit:
             self.audit.log("appendix_done", session_id=session_id,
                            status=result.status,
@@ -828,4 +924,15 @@ def load_pipeline(audit=None, with_index=True):
         vec = config.INDEX_DIR / "vectors.npy"
         if vec.exists():
             index = GuidelineIndex.load(config.INDEX_DIR)
-    return Pipeline(docs=docs, index=index, abbr_map=abbr_map, audit=audit)
+    select_cache = None
+    if config.SELECT_CACHE:
+        from .gindex import docs_hash
+        from .select_cache import SelectCache
+        select_cache = SelectCache(config.SELECT_CACHE_PATH,
+                                   docs_hash(docs))
+        if select_cache.was_reset() and audit:
+            # register refreshed: every stored verdict references the old
+            # id space — the cache starts empty and rebuilds through use
+            audit.log("select_cache_reset", path=str(config.SELECT_CACHE_PATH))
+    return Pipeline(docs=docs, index=index, abbr_map=abbr_map, audit=audit,
+                    select_cache=select_cache)

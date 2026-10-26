@@ -55,6 +55,14 @@ class CardPinRequest(BaseModel):
     file: str = ""  # empty clears the pin
 
 
+class VerdictRequest(BaseModel):
+    disease: str
+    audience: str = "none"  # none | child | adult | child,adult (row payload)
+    code_version: str
+    current: str  # right | wrong — the zone the row is displayed in
+    action: str   # negate (👎 toggle) | confirm (👍 one-time)
+
+
 class Turn:
     """One in-flight answerer turn (stop-registry entry, owner decision
     2026-10-15). `done` flips the moment the answerer stream finishes
@@ -188,6 +196,41 @@ def pin_session_card(session_id: int, req: CardPinRequest):
     return {"ok": True}
 
 
+@app.get("/api/verdicts")
+def get_verdicts():
+    """The pair-verdict select cache (owner decision 2026-10-26): the UI
+    renders appendix rows per CURRENT verdicts — a human revision moves a
+    pair between the normal sources list and the grayed «отфильтрованные»
+    zone — and shows 👍 only on never-revised pairs."""
+    cache = app.state.pipe.select_cache
+    if cache is None:
+        return {"entries": {}}
+    return {"entries": cache.all_verdicts()}
+
+
+@app.post("/api/verdicts")
+def post_verdict(req: VerdictRequest):
+    """Human revision of a pair verdict (owner decision 2026-10-26): 👎
+    negates the pair's current verdict (toggle attached/grayed), 👍
+    confirms it once; after any click the pair is human-revised and
+    machine writes never overwrite it. Legacy rows whose pair was never
+    cached are materialized from the displayed zone (`current`)."""
+    cache = app.state.pipe.select_cache
+    if cache is None:
+        raise HTTPException(503, "select cache disabled")
+    if req.current not in ("right", "wrong") or \
+            req.action not in ("negate", "confirm"):
+        raise HTTPException(400, "current must be right|wrong, "
+                                 "action must be negate|confirm")
+    entry = (cache.negate if req.action == "negate" else cache.confirm)(
+        req.disease, req.audience, req.code_version, req.current)
+    app.state.audit.log("select_verdict", action=req.action,
+                        disease=req.disease, audience=req.audience,
+                        code_version=req.code_version,
+                        verdict=entry["verdict"])
+    return entry
+
+
 @app.post("/api/sessions/{session_id}/stop")
 def stop_turn(session_id: int):
     """Stop the session's in-flight answerer turn(s) — undo the send (owner
@@ -215,6 +258,9 @@ STAGE_TEXT = {
     "search": "Ищу соответствующие pdf.",
     "auto_pick": "Соответствие найдено.",
     "select": "Фильтрую по: «{disease}»",
+    # pair-verdict cache hit (owner decision 2026-10-26): every candidate
+    # pair already carries a verdict — no labeler call runs this turn
+    "select_cache": "Ранее отобрано — использую сохранённый отбор.",
 }
 
 # manual «pdf » turns: same stages, a wording that fits an explicit request

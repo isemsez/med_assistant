@@ -453,6 +453,32 @@ final answer = raw answer + appendix block (local PDF links only)
   adult/pediatric duplicates stay with the selector). With the
   reasoning-first fix the guard mainly nets grammar-legal empty-string
   reasoning on verbatim-title cases.
+- Pair-verdict cache (owner decision 2026-10-26): every settled selection
+  freezes its per-pair verdicts — (normalized disease, audience bucket) →
+  `code_version` = right/wrong — into `data/select_cache.yaml`
+  (`SELECT_CACHE=0` disables). A later turn whose candidate pairs are ALL
+  covered skips labeler 2 and auto-pick entirely (stage line «Ранее
+  отобрано…», appendix marks «из кэша»; the audit `select_cache` row
+  carries hit/known/total — the measured motivation: 81% of live select
+  group runs were exact (session, disease) repeats eating 87% of select
+  seconds, and the 4B attached different pdf sets for the same disease on
+  consecutive turns). The audience bucket (`_audience_bucket`: none/child/
+  adult from the same marker family the audience guard uses) is part of the
+  key — a «а у ребёнка?» follow-up judges under its own key, never reusing
+  the adult-flow verdict. Partial coverage attaches the cached-right pairs
+  without judging and runs the live select over the UNKNOWN candidates
+  only (judged pairs are never re-rolled). A WRONG pair — machine-filtered
+  or human-disliked — never attaches and is excluded before auto-pick (a
+  disliked dominant candidate falls through to a live select) and before
+  the guards; it still renders grayed among the filtered-out candidates
+  (§7.4). Write rules: the picked union post-guards is right, the rest
+  wrong; a looped group's pairs are never written (a degenerate judgment
+  must not freeze); a human revision (§7.4) is never overwritten. Only
+  turns with a session id participate — regression, canary and plain CLI
+  runs bypass read AND write, so the golden loop canary always exercises
+  the live selector; the file is stamped `docs_meta_sha1` (a register
+  refresh resets it, `select_cache_reset` audit row) and is local runtime
+  state, never shipped in the deploy zip.
 
 ### [5] Renderer
 
@@ -525,9 +551,17 @@ with partial or faked results; the answer ships with the honest note.
    thinking, auto-collapses when the answer text starts, and stays open if
    the physician reopened it manually. Not persisted with the message.
 2. **Appendix progress is visible and non-blocking.** Each machinery stage
-   (extract → search → auto-pick/select) streams a status line under the
+   (extract → search → auto-pick/select/cache) streams a status line under the
    answer. The composer unblocks as soon as the answer text is complete —
-   the next question may be typed while the appendix finishes.
+   the next question may be typed while the appendix finishes. The chat
+   auto-follows every stage update while following was already on (owner
+   rule 2026-10-26): the follow decision is the view's position BEFORE the
+   update — a stage event can add more than the follow threshold in one
+   block (the candidates list), and checking after the insert broke the
+   follow exactly there, leaving the «Кандидаты pdf…» block and the status
+   line below it under the fold for the rest of the turn. Manual scrolling
+   up still pauses the follow (the 2026-10-12 doctrine); it resumes at the
+   bottom.
 3. **Provisional candidate cards carry no retrieval score.** On labeler-2
    turns the streamed cards are name+link only — embedding cosine is a name
    match strength, not a probability of correctness, and showing it as a %
@@ -580,6 +614,19 @@ with partial or faked results; the answer ships with the honest note.
    candidates exist but none were verified — the filtered-out list is the
    honest presentation. Legacy stored notes are filtered out in the UI.
    True error notes (extract/search/select failures) are unchanged.
+4. **Pair verdicts are human-revisable (owner decision 2026-10-26).** Every
+   appendix row — picked or filtered-out — carries revision buttons wired to
+   the pair-verdict cache (§3[4]): 👎 negates the pair's CURRENT verdict
+   (toggle: an attached pick grays out and stops attaching in future turns;
+   a grayed row starts attaching), 👍 appears only while the pair was never
+   human-revised and confirms the machine's verdict; after any click the
+   pair is «human-revised» and only 👎 remains (flip back anytime). The
+   buttons work on historical rows too: the UI renders each row per the
+   CURRENT verdicts (GET /api/verdicts), so a revision is visible on old
+   turns, while the stored payload is never rewritten — history stays as
+   it shipped, the cache changes the future. `POST /api/verdicts` applies
+   negate/confirm server-side (audit `select_verdict`); the click is
+   optimistic and re-renders from the server on failure.
 
 ## 8. Manual pdf queries
 

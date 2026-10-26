@@ -136,46 +136,140 @@ function noteNode(text, isError, anchor) {
 // selection filtered out hides behind ONE collapsible for the whole block
 // (labeler 2 is fallible — nothing is lost irrecoverably). A single
 // filtered-out entry is shown directly, no toggle.
+//
+// Pair-verdict revision (owner decision 2026-10-26): every row carries 👎 —
+// it NEGATES the pair's current verdict (toggle: attached <-> grayed, the
+// pair moves between the normal list and the «отфильтрованные» zone) — and
+// 👍 only while the pair was never human-revised (it confirms the machine's
+// verdict; after any click only 👎 remains). The CURRENT verdicts map
+// (GET /api/verdicts) decides each row's zone and button set, so a
+// revision is visible on old turns too; the stored payload is never
+// rewritten — history stays as it shipped, the cache changes the future.
+const verdictState = { entries: null };
+
+function normDisease(d) {
+  return d.trim().toLowerCase().replace(/ё/g, "е"); // server-side key form
+}
+
+async function refreshVerdicts() {
+  try {
+    const r = await fetch("/api/verdicts");
+    verdictState.entries = r.ok ? ((await r.json()).entries || {}) : null;
+  } catch (e) {
+    verdictState.entries = null;
+  }
+}
+
+function verdictOf(disease, audience, cv) {
+  const d = verdictState.entries && verdictState.entries[normDisease(disease)];
+  const b = d && d[audience || "none"];
+  return (b && b[cv]) || null;
+}
+
 function renderAppendix(payload, anchor) {
   const groups = (payload.by_disease || []).filter((g) => (g.picks || []).length);
   const filtered = payload.filtered_out || [];
-  if (payload.appendix_text || groups.length || filtered.length) {
-    const wrap = document.createElement("div");
-    wrap.className = "sources";
-    const items = [];
-    for (const g of groups) {
-      const auto = g.auto_pick ? " · автоподбор" : "";
-      const byDisease = ` — по «${esc(g.disease)}»${auto}`;
-      for (const p of g.picks || []) {
-        items.push(`<li><a href="${esc(p.url)}" target="_blank" rel="noopener">
-          «${esc(p.name)}» (${esc(p.code_version)})</a>${byDisease}</li>`);
-      }
-    }
-    const filteredItem = (c) => `<li class="filtered">
-      <a href="${esc(c.url)}" target="_blank" rel="noopener">
-      «${esc(c.name)}» (${esc(c.code_version)})</a> — по «${esc(c.disease)}»</li>`;
-    if (filtered.length === 1) {
-      items.push(filteredItem(filtered[0]));
-    } else if (filtered.length > 1) {
-      const show = `Показать отфильтрованные (${filtered.length})`;
-      items.push(`<li class="cands">
-        <button type="button" class="cand-toggle" data-show="${esc(show)}">${esc(show)}</button>
-        <ul hidden>${filtered.map(filteredItem).join("")}</ul></li>`);
-    }
-    wrap.addEventListener("click", (e) => {
-      const btn = e.target.closest(".cand-toggle");
-      if (!btn) return;
+  // legacy stored payloads carry per-disease no-match notes — dropped
+  const notes = (payload.notes || [])
+    .filter((n) => !/^Pdf по «.*» не найдено\.$/.test(n));
+  if (!(payload.appendix_text || groups.length || filtered.length)) {
+    for (const n of notes) noteNode(n, false, anchor || null);
+    return null;
+  }
+
+  // one flat row model: the stored payload position (picked = right,
+  // filtered = wrong) is the DEFAULT; a pair present in the verdicts map
+  // renders per its CURRENT verdict instead
+  const rows = [];
+  const addRow = (c, disease, audience, zone, byline) => {
+    const v = verdictOf(disease, audience, c.code_version);
+    rows.push({
+      code_version: c.code_version, name: c.name, url: c.url,
+      disease, audience: audience || "none",
+      current: v ? v.verdict : zone,
+      human: !!(v && v.human), byline,
+    });
+  };
+  for (const g of groups) {
+    const auto = g.auto_pick ? " · автоподбор"
+      : g.cached ? " · из кэша" : "";
+    const byline = ` — по «${esc(g.disease)}»${auto}`;
+    for (const p of g.picks || []) addRow(p, g.disease, g.audience, "right", byline);
+  }
+  for (const c of filtered) {
+    addRow(c, c.disease, c.audience, "wrong", ` — по «${esc(c.disease)}»`);
+  }
+
+  const rowHtml = (r, grayed) => `<li${grayed ? ' class="filtered"' : ""}>
+    <a href="${esc(r.url)}" target="_blank" rel="noopener">
+    «${esc(r.name)}» (${esc(r.code_version)})</a>${r.byline}
+    <span class="vd" data-disease="${esc(r.disease)}"
+          data-audience="${esc(r.audience)}" data-cv="${esc(r.code_version)}"
+          data-current="${r.current}">${
+      r.human ? "" : `<button type="button" class="vd-btn" data-act="confirm"
+        title="Подтвердить: подобрано верно">👍</button>`
+    }<button type="button" class="vd-btn" data-act="negate"
+        title="Отклонить подбор (повторное нажатие вернёт)">👎</button></span></li>`;
+
+  const right = rows.filter((r) => r.current === "right");
+  const wrong = rows.filter((r) => r.current === "wrong");
+  const items = right.map((r) => rowHtml(r, false));
+  if (wrong.length === 1) {
+    items.push(rowHtml(wrong[0], true));
+  } else if (wrong.length > 1) {
+    const show = `Показать отфильтрованные (${wrong.length})`;
+    items.push(`<li class="cands">
+      <button type="button" class="cand-toggle" data-show="${esc(show)}">${esc(show)}</button>
+      <ul hidden>${wrong.map((r) => rowHtml(r, true)).join("")}</ul></li>`);
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "sources";
+  wrap.innerHTML = `<ul>${items.join("")}</ul>`;
+  wrap.addEventListener("click", (e) => {
+    const btn = e.target.closest(".cand-toggle");
+    if (btn) {
       const ul = btn.parentElement.querySelector("ul");
       ul.hidden = !ul.hidden;
       btn.textContent = ul.hidden ? btn.dataset.show : "Скрыть отфильтрованные";
+      return;
+    }
+    const vd = e.target.closest(".vd-btn");
+    if (vd) reviseVerdict(vd.closest(".vd"), vd.dataset.act, wrap, payload, anchor);
+  });
+  insertAfter(wrap, anchor || null);
+  for (const n of notes) noteNode(n, false, anchor || null);
+  return wrap;
+}
+
+async function reviseVerdict(span, action, wrap, payload, anchor) {
+  const { disease, audience, cv, current } = span.dataset;
+  // optimistic: apply the same transition the server will persist, then
+  // re-render the whole block in place (the row moves zones)
+  if (!verdictState.entries) verdictState.entries = {};
+  const buckets = verdictState.entries[normDisease(disease)]
+    || (verdictState.entries[normDisease(disease)] = {});
+  const pairs = buckets[audience] || (buckets[audience] = {});
+  const base = (pairs[cv] && pairs[cv].verdict) || current;
+  pairs[cv] = {
+    verdict: action === "confirm" ? base : (base === "right" ? "wrong" : "right"),
+    human: true,
+  };
+  const fresh = renderAppendix(payload, anchor);
+  if (wrap.parentNode && fresh) wrap.parentNode.replaceChild(fresh, wrap);
+  try {
+    await api("/api/verdicts", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ disease, audience,
+        code_version: cv, current, action }),
     });
-    wrap.innerHTML = `<ul>${items.join("")}</ul>`;
-    insertAfter(wrap, anchor || null);
-  }
-  for (const n of payload.notes || []) {
-    // legacy stored payloads carry per-disease no-match notes — dropped
-    if (/^Pdf по «.*» не найдено\.$/.test(n)) continue;
-    noteNode(n, false, anchor || null);
+  } catch (e) {
+    noteNode(`Не удалось сохранить оценку: ${e.message}`, true, anchor || null);
+    await refreshVerdicts(); // server remains the truth — redraw from it
+    const again = renderAppendix(payload, anchor);
+    if (fresh && fresh.parentNode && again) {
+      fresh.parentNode.replaceChild(again, fresh);
+    }
   }
 }
 
@@ -200,6 +294,7 @@ async function loadSession(id) {
     $("#messages").innerHTML = "";
     resetCardState(); // the visible card state never carries across sessions
     await loadSessionPin(id); // …but the session's pin comes back invisibly
+    await refreshVerdicts(); // current pair verdicts for the appendix rows
     const r = await api(`/api/sessions/${id}/messages`);
     const msgs = await r.json();
     // An in-flight turn for THIS session renders from its live wrapper, not
@@ -504,6 +599,19 @@ async function send(question) {
   // and only while the view is at the bottom (nearBottom): scrolling up
   // pauses the follow until the physician returns to the bottom
   const autoScroll = () => { if (wrap.isConnected && nearBottom()) scrollDown(); };
+  // Follow around a DOM mutation (owner rule 2026-10-26): the follow decision
+  // is the PRE-mutation position, not the post-mutation one. A stage event
+  // can add more than the nearBottom threshold in one block — the candidates
+  // list is 120-160px — and checking after the insert broke the follow
+  // exactly there: the «Кандидаты pdf…» block and the status line below it
+  // stayed under the fold for the rest of the turn while the answer stream
+  // had followed fine (token deltas fit inside the threshold). Manual
+  // scrolling up still pauses the follow; it resumes at the bottom.
+  const followScroll = (mutate) => {
+    const on = wrap.isConnected && nearBottom();
+    mutate();
+    if (on) scrollDown();
+  };
   scrollDown();
 
   let sid = state.current;
@@ -531,19 +639,17 @@ async function send(question) {
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = "", cursorOn = true, answerStarted = false;
-    const render = () => {
+    const render = () => followScroll(() => {
       body.innerHTML = fmt(answer) + (cursorOn ? `<span class="cursor">▍</span>` : "");
-      autoScroll();
-    };
-    const status = (text) => {
+    });
+    const status = (text) => followScroll(() => {
       if (!statusLine) {
         statusLine = document.createElement("div");
         statusLine.className = "status-line";
         insertAfter(statusLine, anchor);
       }
       statusLine.textContent = text;
-      autoScroll();
-    };
+    });
     const clearStatus = () => {
       if (statusLine) { statusLine.remove(); statusLine = null; }
     };
@@ -553,19 +659,20 @@ async function send(question) {
     let candBlocks = [];
     let candAnchor = asst;
     const showCandidates = (disease, cards) => {
-      const candWrap = document.createElement("div");
-      candWrap.className = "sources provisional";
-      const items = (cards || []).map((c) => `<li>${
-        c.url
-          ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">«${esc(c.name)}» (${esc(c.code_version)})</a>`
-          : `«${esc(c.name)}» (${esc(c.code_version)})`
-      }</li>`).join("");
-      candWrap.innerHTML = `<div class="caption">Кандидаты pdf — фильтрую по «${esc(disease)}»</div>
-        <ul>${items}</ul>`;
-      insertAfter(candWrap, candAnchor);
-      candAnchor = candWrap;
-      candBlocks.push(candWrap);
-      autoScroll();
+      followScroll(() => {
+        const candWrap = document.createElement("div");
+        candWrap.className = "sources provisional";
+        const items = (cards || []).map((c) => `<li>${
+          c.url
+            ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">«${esc(c.name)}» (${esc(c.code_version)})</a>`
+            : `«${esc(c.name)}» (${esc(c.code_version)})`
+        }</li>`).join("");
+        candWrap.innerHTML = `<div class="caption">Кандидаты pdf — фильтрую по «${esc(disease)}»</div>
+          <ul>${items}</ul>`;
+        insertAfter(candWrap, candAnchor);
+        candAnchor = candWrap;
+        candBlocks.push(candWrap);
+      });
     };
     const clearCandidates = () => {
       candBlocks.forEach((b) => b.remove());
@@ -589,10 +696,11 @@ async function send(question) {
         const data = JSON.parse(ev.data);
         if (ev.event === "reasoning") {
           if (!thinking) thinking = makeThinkingBlock(asst);
-          thinkRaw += data.t;
-          thinking.body.innerHTML = fmt(thinkRaw);
-          thinking.open();
-          autoScroll();
+          followScroll(() => {
+            thinkRaw += data.t;
+            thinking.body.innerHTML = fmt(thinkRaw);
+            thinking.open();
+          });
         } else if (ev.event === "reasoning_reset") {
           // degenerate thinking loop aborted upstream; the retry restarts
           // the reasoning from scratch (or the turn died on a second loop) —
@@ -603,8 +711,7 @@ async function send(question) {
         } else if (ev.event === "drug_map") {
           // register-grounded МНН block under the question bubble; the
           // same renderer restores it from m.drug_map after a reload
-          renderDrugMap(data.matches, userNode);
-          autoScroll();
+          followScroll(() => renderDrugMap(data.matches, userNode));
         } else if (ev.event === "kind" && data.turn === "pdf") {
           // manual pdf turn renders as ONE row: the question bubble is
           // retitled and re-bodied; the assistant bubble never appears
@@ -639,10 +746,11 @@ async function send(question) {
           if (data.message_id != null) asst.dataset.mid = data.message_id;
           activeStream.done = true;
         } else if (ev.event === "appendix") {
-          clearStatus();
-          clearCandidates(); // provisional list -> final filtered sources
-          renderAppendix(data, anchor);
-          autoScroll();
+          followScroll(() => {
+            clearStatus();
+            clearCandidates(); // provisional list -> final filtered sources
+            renderAppendix(data, anchor);
+          });
         } else if (ev.event === "stopped") {
           // undo the send (owner decision 2026-10-15): the server deleted the
           // turn's rows; drop the live wrapper and put the question back into
@@ -657,12 +765,13 @@ async function send(question) {
             $("#question").focus();
           }
         } else if (ev.event === "error") {
-          clearStatus();
-          clearCandidates();
-          cursorOn = false;
-          render();
-          noteNode(data.text, true, anchor);
-          autoScroll();
+          followScroll(() => {
+            clearStatus();
+            clearCandidates();
+            cursorOn = false;
+            render();
+            noteNode(data.text, true, anchor);
+          });
         }
       }
     }

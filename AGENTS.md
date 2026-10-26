@@ -109,7 +109,31 @@ root-caused.
 After selection, a unique candidate whose guideline title contains the
 extracted disease verbatim is kept even if the selector dropped it (title
 guard, 2026-10-19, kept as a safety net — e.g. for empty-string reasoning,
-which stays grammar-legal). Failures surface as honest notes;
+which stays grammar-legal).
+Pair-verdict select cache (owner decision 2026-10-26): every settled
+selection freezes per-pair verdicts — (normalized disease, audience
+bucket none/child/adult from the same markers the audience guard uses) →
+guideline id = right/wrong — into `data/select_cache.yaml`
+(`SELECT_CACHE=0` disables); a later turn whose candidate pairs are all
+covered skips labeler 2 AND auto-pick (stage «Ранее отобрано…», appendix
+marks «из кэша»; the motivation measured in the live log: 81% of select
+group runs were exact (session, disease) repeats eating 87% of select
+seconds, and the 4B attached different pdf sets for the same disease on
+consecutive turns); partial coverage attaches cached-right pairs without
+judging and selects over the unknowns only; a WRONG pair (machine or
+human) never attaches — excluded before auto-pick and the guards — and
+renders grayed among the filtered-out candidates, where every row carries
+revision buttons: 👎 negates the pair's current verdict (toggle
+attached/grayed), 👍 (never-revised pairs only) confirms it, any click
+makes the pair human-revised (only 👎 remains) and is never overwritten
+by machine writes (`POST /api/verdicts`, audit `select_verdict`; the UI
+renders rows per CURRENT verdicts, stored payloads are never rewritten);
+a looped select group's pairs are never frozen. Only turns with a
+session id read/write the cache — regression, canary and plain CLI runs
+bypass it entirely (the loop-canary golden keeps exercising the live
+selector); the file is stamped `docs_meta_sha1` (register refresh =
+reset, audit `select_cache_reset`) and stays local — never in the deploy
+zip. Failures surface as honest notes;
 nothing is retried at the semantic level. Delivered as a chat web app.
 
 UX (architecture.md §6): the answerer's reasoning
@@ -129,7 +153,12 @@ verified picks client-side when the appendix payload arrives (cards are
 name+link only — retrieval scores are display-free, consumed by auto-pick
 alone); when one search candidate clearly dominates
 (`AUTO_PICK_MIN`/`AUTO_PICK_GAP`, default 0.80/0.05), labeler call 2 is
-skipped and that candidate is auto-picked (marked «автоподбор»).
+skipped and that candidate is auto-picked (marked «автоподбор»); the
+chat auto-follows every stage update while following was on — the follow
+decision is the view's position BEFORE the update (owner rule 2026-10-26:
+checking after a >80px block like the candidates list broke the follow
+exactly there, leaving «Кандидаты pdf…» and the status line below the
+fold; manual scroll up still pauses the follow).
 
 Manual pdf queries (architecture.md §8): a message
 whose first whitespace token is `pdf`/`пдф` (case-insensitive) skips the
@@ -212,6 +241,10 @@ data/patient_cards/      hand-made demo patient charts: attachable
                           per-question answerer context; nothing is stored
                           (architecture.md §9)
 data/sessions.sqlite     persistent chat sessions
+data/select_cache.yaml   pair-verdict select cache (disease+audience → pdf =
+                          right/wrong; machine-written, 👎/👍 human-revisable;
+                          docs_meta_sha1-stamped, local runtime state — never
+                          in the deploy zip; SELECT_CACHE=0 disables)
 data/backups/            startup backups of sessions.sqlite (newest 5 kept)
 logs/audit.jsonl         one record per pipeline stage per turn (size-rotated,
                           3 generations)

@@ -106,6 +106,7 @@ class FakePipe:
         self.appendix_events = appendix_events
         self.appendix_error = appendix_error
         self.calls = []
+        self.select_cache = None  # pair-verdict cache (TestVerdicts fills it)
         # "events" (default) | "endless" (streams forever; the server's stop
         # flag breaks the loop) | "cancel_sim" (waits for the flag, then
         # raises LLMCancelled — the instant-drop path)
@@ -821,6 +822,71 @@ class TestStatsAndAdmin(Base):
         r = self.client.get("/admin")
         self.assertEqual(r.status_code, 200)
         self.assertIn("Состояние системы", r.text)
+
+
+class TestVerdicts(unittest.TestCase):
+    """Pair-verdict revision endpoints (owner decision 2026-10-26): GET
+    dumps the cache for the appendix row rendering, POST applies 👎
+    (negate/toggle) or 👍 (one-time confirm) and audits `select_verdict`."""
+
+    def setUp(self):
+        from medassistant.select_cache import SelectCache
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.pipe = FakePipe()
+        self.pipe.select_cache = SelectCache(
+            Path(tmp.name) / "select_cache.yaml", "stamp")
+        self.client, self._cm = make_client(self.pipe)
+
+    def tearDown(self):
+        self._cm.__exit__(None, None, None)
+
+    def _post(self, **kw):
+        body = {"disease": "ХСН", "audience": "none", "code_version": "2_1",
+                "current": "right", "action": "negate"}
+        body.update(kw)
+        return self.client.post("/api/verdicts", json=body)
+
+    def test_negate_then_get(self):
+        self.assertEqual(self.client.get("/api/verdicts").json(),
+                         {"entries": {}})
+        r = self._post()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"verdict": "wrong", "human": True})
+        got = self.client.get("/api/verdicts").json()["entries"]
+        self.assertEqual(got["хсн"]["none"]["2_1"],
+                         {"verdict": "wrong", "human": True})
+
+    def test_confirm(self):
+        r = self._post(action="confirm")
+        self.assertEqual(r.json(), {"verdict": "right", "human": True})
+
+    def test_audit_row_written(self):
+        self._post()
+        rows = [json.loads(l) for l in
+                Path(os.environ["AUDIT_LOG"]).read_text(encoding="utf-8")
+                .splitlines() if l.strip()]
+        row = [r for r in rows if r["stage"] == "select_verdict"][-1]
+        self.assertEqual(row["action"], "negate")
+        self.assertEqual(row["code_version"], "2_1")
+        self.assertEqual(row["verdict"], "wrong")
+
+    def test_bad_values_400(self):
+        self.assertEqual(self._post(current="maybe").status_code, 400)
+        self.assertEqual(self._post(action="like").status_code, 400)
+
+    def test_disabled_cache(self):
+        pipe = FakePipe()  # no select_cache -> feature off
+        client, cm = make_client(pipe)
+        try:
+            self.assertEqual(client.get("/api/verdicts").json(),
+                             {"entries": {}})
+            r = client.post("/api/verdicts", json={
+                "disease": "ХСН", "audience": "none", "code_version": "2_1",
+                "current": "right", "action": "negate"})
+            self.assertEqual(r.status_code, 503)
+        finally:
+            cm.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

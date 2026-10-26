@@ -62,11 +62,14 @@ $DataWhitelist = @(
 # Local-only entries: runtime artifacts and build-time inputs that must exist
 # in the dev tree but are never staged. Anything outside both lists is a stray
 # file the whitelist copy would silently ignore — fail loudly instead.
+# select_cache.yaml: the machine-written pair-verdict select cache with the
+# owner's 👎/👍 revisions (2026-10-26) — per-machine state, like sessions.sqlite.
 $DataLocalOnly = @(
     'backups',
     'sessions.sqlite',
     'sessions.sqlite-shm',
     'sessions.sqlite-wal',
+    'select_cache.yaml',
     'grls.xlsx',
     'inn_gloss.yaml',
     'inn_list_en-lat.txt',
