@@ -1,0 +1,23 @@
+name: tests
+
+# Offline unit suite (no model endpoints, no local data assets) on every
+# push to main and every PR. windows-latest because the product targets
+# Windows and parts of the launcher tests exercise winreg.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  offline-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Run offline test suite
+        run: python -m unittest discover -s tests

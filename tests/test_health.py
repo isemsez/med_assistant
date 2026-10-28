@@ -181,8 +181,13 @@ class TestRunHealth(unittest.TestCase):
             return wrapper
 
         orig = health.check_model, health.check_embed
+        orig_data = health.check_index, health.check_corpus
         health.check_model = counting(lambda *a, **k: {"ok": True})
         health.check_embed = counting(lambda *a, **k: {"ok": True})
+        # hermetic: run_health aggregates whatever the checks return; without
+        # stubs the row would depend on real data/index assets on disk
+        health.check_index = lambda *a, **k: {"ok": True}
+        health.check_corpus = lambda *a, **k: {"ok": True}
         try:
             r1 = health.run_health(cache_ttl=30)
             r2 = health.run_health(cache_ttl=30)  # served from cache
@@ -192,6 +197,7 @@ class TestRunHealth(unittest.TestCase):
             self.assertEqual(calls["n"], 6)
         finally:
             health.check_model, health.check_embed = orig
+            health.check_index, health.check_corpus = orig_data
             health._cache.clear()
 
     def test_single_flight_under_threads(self):

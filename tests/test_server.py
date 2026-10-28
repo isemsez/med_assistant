@@ -62,8 +62,11 @@ def setUpModule():
         "## Диагнозы\n- тест", encoding="utf-8")
     os.environ["CARD_DIR"] = str(cards_dir)
     import medassistant.config
-    import medassistant.server
+    # reload BEFORE the first server import: at import time the /data/pdf
+    # mount reads config.CLINREC_DIR from the cached module — a fresh
+    # checkout without data/clinrec_minzdrav would crash on the default path
     importlib.reload(medassistant.config)
+    import medassistant.server
     importlib.reload(medassistant.server)
     srv = medassistant.server
 
@@ -73,8 +76,12 @@ def tearDownModule():
               "INDEX_DIR", "CARD_DIR", "DRUGS_DB"):
         os.environ.pop(k, None)
     import medassistant.config
-    import medassistant.server
     importlib.reload(medassistant.config)
+    # a fresh checkout has no data/clinrec_minzdrav yet; the server reload
+    # below mounts it at import — create it empty so the reload survives
+    # (the dir is gitignored and needed by any real run anyway)
+    Path(medassistant.config.CLINREC_DIR).mkdir(parents=True, exist_ok=True)
+    import medassistant.server
     importlib.reload(medassistant.server)
     shutil.rmtree(TMP, ignore_errors=True)
 
