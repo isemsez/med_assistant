@@ -11,6 +11,9 @@ data/sessions.sqlite-wal
 data/select_cache.yaml
 data/drugs.sqlite
 *grls.xlsx
+data/abbr2term.yaml
+*.mp4
+*.pptx
 
 data/backups/
 logs/
