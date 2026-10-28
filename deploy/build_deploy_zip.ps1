@@ -191,8 +191,18 @@ $AppModules = @(
     '__init__.py','__main__.py','abbr.py','appendix.py','audit.py','canary.py',
     'cards.py','cli.py','config.py','drugmap.py','gindex.py','health.py',
     'launcher.py','llm.py','loopguard.py','pipeline.py','prompts.py',
-    'regression.py','stats.py','store.py'
+    'regression.py','select_cache.py','stats.py','store.py'
 )
+# A module missing from this list ships a zip that crashes at startup with
+# ModuleNotFoundError (2026-10-28: select_cache.py — pipeline.py imported it,
+# the module itself was not whitelisted, the deployed copy in Downloads died
+# in lifespan _wire) — fail the build on any .py the whitelist would drop.
+$BadMod = Get-ChildItem -LiteralPath $AppSrc -Filter '*.py' -File |
+    Where-Object { -not ($_.Name -in $AppModules) }
+if ($BadMod) {
+    $names = ($BadMod | ForEach-Object { $_.Name }) -join ', '
+    throw "medassistant\ contains .py files the module whitelist would silently drop: $names. Add them to `$AppModules`."
+}
 foreach ($m in $AppModules) {
     Copy-Item -LiteralPath (Join-Path $AppSrc $m) -Destination $AppDst -Force
 }
@@ -269,6 +279,24 @@ foreach ($f in $HideFiles) {
     if (Test-Path -LiteralPath $p) { & attrib +h "$p" }
 }
 
+# --- disk-space guard ----------------------------------------------------------
+# 2026-10-28: two builds ran concurrently (staging ~7 GB + zip ~5.5 GB each)
+# and the second zip write died on a full disk at 1.65 GB — a truncated file
+# that still looked like a normal artifact and got extracted over a live
+# deploy. The zip can never exceed the staged bytes (compression), so require
+# staging + 2 GB headroom on the TARGET drive before writing anything.
+$StagedBytes = (Get-ChildItem -LiteralPath $StagingApp -Recurse -File -Force |
+    Measure-Object -Sum Length).Sum
+$ZipDrive = [System.IO.DriveInfo]::new((Split-Path -Qualifier $ZipPath))
+$ZipFree = $ZipDrive.AvailableFreeSpace
+$ZipNeed = $StagedBytes + 2GB
+if ($ZipFree -lt $ZipNeed) {
+    $msg = "not enough free space on {0}: {1:N1} GB free, need {2:N1} GB" -f `
+        $ZipDrive.Name, ($ZipFree / 1GB), ($ZipNeed / 1GB)
+    throw "$msg (staged $([math]::Round($StagedBytes / 1GB, 1)) GB + zip + headroom). " +
+        "Another build running concurrently? Staging kept at '$StagingApp'."
+}
+
 # --- create UTF-8 zip, top folder med_assistant\ ------------------------------
 Write-Host "Creating zip (UTF-8, top folder `"med_assistant`", compression $CompressionLevel)..."
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -281,6 +309,25 @@ $ZipSw = [System.Diagnostics.Stopwatch]::StartNew()
     [System.Text.Encoding]::UTF8)
 $ZipSw.Stop()
 Write-Host "Zip written in $([math]::Round($ZipSw.Elapsed.TotalSeconds, 1)) s."
+
+# --- zip integrity check --------------------------------------------------------
+# A zip write that dies mid-way (disk full, 2026-10-28: truncated 1.65 GB
+# artifact extracted over a live deploy) loses its central directory — the
+# file fails to OPEN, not to extract, so opening read-mode and counting file
+# entries catches it while staging is still around for diagnosis. Entry name
+# separators differ by PowerShell generation ('/' on .NET 8, '\' on .NET
+# Framework) — filter both before comparing.
+$StagedFiles = @(Get-ChildItem -LiteralPath $StagingApp -Recurse -File -Force)
+$ZipCheck = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+try {
+    $ZipFileEntries = @($ZipCheck.Entries |
+        Where-Object { $_.FullName -notmatch '/$|\\$' })
+    if ($ZipFileEntries.Count -ne $StagedFiles.Count) {
+        throw "zip integrity check failed: $($ZipFileEntries.Count) file entries " +
+            "vs $($StagedFiles.Count) staged files — '$ZipPath' is incomplete, do NOT extract. " +
+            "Staging kept at '$StagingApp'."
+    }
+} finally { $ZipCheck.Dispose() }
 
 # --- embed Hidden flag on the internal folder/file entries --------------------
 # CreateFromDirectory writes no directory entries for non-empty dirs, so the
