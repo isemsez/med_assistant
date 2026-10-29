@@ -27,7 +27,7 @@
 
 ## Демонстрация
 
-- Скринкаст (3–5 мин): [видео в GitHub Releases](../../releases).
+- Скринкаст (3–5 мин): [видео в GitHub Releases](https://github.com/isemsez/med_assistant/releases).
 - Веб-интерфейс после запуска: `http://127.0.0.1:8866`, страница наблюдаемости
   `http://127.0.0.1:8866/admin`.
 
@@ -134,8 +134,8 @@ flowchart LR
   (правильные ссылки, но зацикленное рассуждение отбора) — деградация
   должна быть видна, а не скрыта.
 - **Оффлайн-тесты:** `python -m unittest discover -s tests` — 435 тестов,
- _endpoint'ы не нужны; CI гоняет их на каждый пуш
-([badge](../../actions/workflows/tests.yml)).
+ _endpoint'ы не нужны; CI гоняет их на каждый пуш:
+![tests](https://github.com/isemsez/med_assistant/actions/workflows/tests.yml/badge.svg)
 - **Хозяйство:** per-boot логи (llama-answerer/labeler/embed + web, хранятся
   5 загрузок), бэкапы `sessions.sqlite` при старте сервера (5 последних,
   только локально — переписка врача чувствительна), WAL.
